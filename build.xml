@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<project name="SQLiteMap" default="dist" basedir=".">
+    <property name="base" location="."/>
+    <property name="src" location="src"/>
+    <property name="build" location="bin"/>
+    <property name="doc" location="docs"/>
+    <property name="dist" location="dist"/>
+
+    <target name="version">
+        <property file="${base}/version.properties"/>
+        <fail unless="version.major">Property 'version.major' was not found!</fail>
+        <fail unless="version.minor">Property 'version.minor' was not found!</fail>
+        <fail unless="version.patch">Property 'version.patch' was not found!</fail>
+    </target>
+
+    <target name="init">
+        <mkdir dir="${build}"/>
+        <mkdir dir="${doc}"/>
+        <mkdir dir="${dist}"/>
+    </target>
+
+    <target name="clean" depends="init" description="clean up build files">
+        <delete includeemptydirs="true">
+            <fileset dir="${build}" includes="**/*"/>
+            <fileset dir="${doc}" includes="**/*"/>
+            <fileset dir="${dist}" includes="**/*"/>
+        </delete>
+    </target>
+
+    <target name="compile" depends="init" description="compile the source">
+        <javac srcdir="${src}" destdir="${build}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
+    </target>
+
+    <target name="doc" depends="init" description="generate documentation">
+        <javadoc sourcepath="${src}" destdir="${doc}"/>
+    </target>
+
+    <target name="dist" depends="clean,version,compile,doc" description="generate the distribution">
+        <local name="version"/>
+        <property name="version" value="${version.major}.${version.minor}.${version.patch}"/>
+        <jar jarfile="${dist}/sqlite-map-${version}.jar">
+            <fileset dir="${build}" includes="**/*.class"/>
+        </jar>
+        <jar jarfile="${dist}/sqlite-map-${version}-sources.jar">
+            <fileset dir="${src}" includes="**/*.java"/>
+        </jar>
+        <jar jarfile="${dist}/sqlite-map-${version}-javadoc.jar">
+            <fileset dir="${doc}" includes="**/*"/>
+        </jar>
+        <zip destfile="${dist}/sqlite-map-${version}.zip">
+            <fileset file="${base}/README.md"/>
+            <fileset file="${base}/LICENSE.txt"/>
+            <zipfileset prefix="docs" dir="${doc}" includes="**/*"/>
+            <fileset file="${dist}/sqlite-map-${version}.jar"/>
+            <fileset file="${dist}/sqlite-map-${version}-sources.jar"/>
+        </zip>
+    </target>
+</project>
