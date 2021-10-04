@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <project name="SQLiteMap" default="dist" basedir=".">
+    <property environment="env"/>
     <property name="base" location="."/>
     <property name="src" location="src"/>
     <property name="build" location="bin"/>
@@ -28,7 +29,14 @@
     </target>
 
     <target name="compile" depends="init" description="compile the source">
-        <javac srcdir="${src}" destdir="${build}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
+        <local name="bootclass.path"/>
+        <property name="bootclass.path" location="${env.JDK8_PATH}/jre/lib/rt.jar"/>
+        <fail message="boot class path &quot;rt.jar&quot; not found!">
+            <condition>
+                <not><available file="${bootclass.path}"/></not>
+            </condition>
+        </fail>
+        <javac srcdir="${src}" destdir="${build}" bootclasspath="${bootclass.path}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
     </target>
 
     <target name="doc" depends="init" description="generate documentation">
@@ -48,11 +56,10 @@
             <fileset dir="${doc}" includes="**/*"/>
         </jar>
         <zip destfile="${dist}/sqlite-map-${version}.zip">
+            <fileset dir="${dist}" includes="*.jar"/>
+            <zipfileset prefix="docs" dir="${doc}" includes="**/*"/>
             <fileset file="${base}/README.md"/>
             <fileset file="${base}/LICENSE.txt"/>
-            <zipfileset prefix="docs" dir="${doc}" includes="**/*"/>
-            <fileset file="${dist}/sqlite-map-${version}.jar"/>
-            <fileset file="${dist}/sqlite-map-${version}-sources.jar"/>
         </zip>
     </target>
 </project>
