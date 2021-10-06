@@ -2,14 +2,16 @@
 
 The **`SQLiteMap`** class provides a map implementation that is backed by an [SQLite](https://www.sqlite.org/) database. It can employ an "in-memory" database or a local database file. Compared to Java's standard `HashMap` class, the *"in-memory"* variant of `SQLiteMap` is better suited for very large maps; it has a smaller memory footprint and does **not** clutter the Java heap space. The *file-based* variant of `SQLiteMap` can handle even bigger maps and provides full persistence.
 
+
 ## Getting started
 
 This example shows how to create and use an "in-memory" **`SQLiteMap`** instance:
 
-    import com.muldersoft.maps.sqlite.SQLiteMap;
-
+    import java.util.Map.Entry;
+    import com.muldersoft.container.sqlite.SQLiteMap;
+    
     public class Main {
-      public static void main(String[] args)  throws Exception {
+      public static void main(String[] args) throws Exception {
         try (final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
           map.put0("Foo", "Lorem ipsum dolor sit amet");
           map.put0("Bar", "Consetetur sadipscing elitr");
@@ -20,14 +22,19 @@ This example shows how to create and use an "in-memory" **`SQLiteMap`** instance
       }
     }
 
-&#128073; Please see the **documentation** (Javadoc) for details!
+&#128161; Please see the **documentation** (Javadoc) for details!
+
 
 ## Dependencies
 
-`SQLiteMap` requires the [**SQLite JDBC Driver**](https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc) to be available. Please see [here](https://github.com/xerial/sqlite-jdbc#readme) for details!
+`SQLiteMap` is compatible with JDK 8 or later. It requires the [**SQLite JDBC Driver**](https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc) to be available.
+
 
 ## License
 
-`SQLiteMap` was created by LoRd_MuldeR [&lt;mulder2@gmx.de&gt;](mailto:mulder2@gmx.de). See [http://muldersoft.com](https://muldersoft.com/) for details!
+`SQLiteMap` was created by LoRd_MuldeR [&lt;mulder2@gmx.de&gt;](mailto:mulder2@gmx.de).
 
-This work is licensed under the [CC0 1.0 Universal License](https://creativecommons.org/publicdomain/zero/1.0/legalcode).
+To the extent possible under law, the person who associated **CC0** with `SQLiteMap` has waived all copyright and related or neighboring rights to `SQLiteMap`. You should have received a copy of the **CC0** legalcode along with this work.
+
+If not, please refer to:  
+<http://creativecommons.org/publicdomain/zero/1.0/>

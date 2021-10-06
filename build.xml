@@ -7,14 +7,23 @@
     <property name="doc" location="docs"/>
     <property name="dist" location="dist"/>
 
-    <target name="version">
+    <target name="version" description="read the version info">
         <property file="${base}/version.properties"/>
         <fail unless="version.major">Property 'version.major' was not found!</fail>
         <fail unless="version.minor">Property 'version.minor' was not found!</fail>
         <fail unless="version.patch">Property 'version.patch' was not found!</fail>
     </target>
 
-    <target name="init">
+    <target name="bootpath" description="determine root class path">
+        <property name="bootclass.path" location="${env.JDK8_PATH}/jre/lib/rt.jar"/>
+        <fail message="boot class path &quot;rt.jar&quot; not found!">
+            <condition>
+                <not><available file="${bootclass.path}"/></not>
+            </condition>
+        </fail>
+    </target>
+
+    <target name="init" description="initialize paths">
         <mkdir dir="${build}"/>
         <mkdir dir="${doc}"/>
         <mkdir dir="${dist}"/>
@@ -28,19 +37,14 @@
         </delete>
     </target>
 
-    <target name="compile" depends="init" description="compile the source">
-        <local name="bootclass.path"/>
-        <property name="bootclass.path" location="${env.JDK8_PATH}/jre/lib/rt.jar"/>
-        <fail message="boot class path &quot;rt.jar&quot; not found!">
-            <condition>
-                <not><available file="${bootclass.path}"/></not>
-            </condition>
-        </fail>
-        <javac srcdir="${src}" destdir="${build}" bootclasspath="${bootclass.path}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
+    <target name="doc" depends="init,bootpath" description="generate documentation">
+        <javadoc sourcepath="${src}" destdir="${doc}" bootclasspath="${bootclass.path}" source="1.8" access="protected" doctitle="SQLiteMap" windowtitle="SQLiteMap">
+            <bottom>Created by LoRd_MuldeR &amp;lt;mulder2@gmx.de&amp;gt; | License: CC0 1.0 Universal</bottom>
+        </javadoc>
     </target>
 
-    <target name="doc" depends="init" description="generate documentation">
-        <javadoc sourcepath="${src}" destdir="${doc}"/>
+    <target name="compile" depends="init,bootpath" description="compile the source">
+        <javac srcdir="${src}" destdir="${build}" bootclasspath="${bootclass.path}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
     </target>
 
     <target name="dist" depends="clean,version,compile,doc" description="generate the distribution">
@@ -48,12 +52,15 @@
         <property name="version" value="${version.major}.${version.minor}.${version.patch}"/>
         <jar jarfile="${dist}/sqlite-map-${version}.jar">
             <fileset dir="${build}" includes="**/*.class"/>
+            <fileset file="${base}/LICENSE.txt"/>
         </jar>
         <jar jarfile="${dist}/sqlite-map-${version}-sources.jar">
             <fileset dir="${src}" includes="**/*.java"/>
+            <fileset file="${base}/LICENSE.txt"/>
         </jar>
         <jar jarfile="${dist}/sqlite-map-${version}-javadoc.jar">
             <fileset dir="${doc}" includes="**/*"/>
+            <fileset file="${base}/LICENSE.txt"/>
         </jar>
         <zip destfile="${dist}/sqlite-map-${version}.zip">
             <fileset dir="${dist}" includes="*.jar"/>

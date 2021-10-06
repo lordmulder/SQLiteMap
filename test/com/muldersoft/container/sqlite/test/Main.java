@@ -1,4 +1,13 @@
-package com.muldersoft.maps.sqlite.test;
+/*
+ * SQLiteMap was created by LoRd_MuldeR <mulder2@gmx.de>.
+ *
+ * To the extent possible under law, the person who associated CC0 with SQLiteMap has waived all copyright and related or
+ * neighboring rights to SQLiteMap. You should have received a copy of the CC0 legalcode along with this work.
+ *
+ * If not, please refer to:
+ * http://creativecommons.org/publicdomain/zero/1.0/
+ */
+package com.muldersoft.container.sqlite.test;
 
 import java.lang.reflect.Array;
 import java.util.Arrays;
@@ -6,7 +15,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 
-import com.muldersoft.maps.sqlite.SQLiteMap;
+import com.muldersoft.container.sqlite.SQLiteMap;
 
 public class Main {
 
