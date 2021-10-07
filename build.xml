@@ -1,27 +1,19 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <project name="SQLiteMap" default="dist" basedir=".">
+    <fail message="Java version is &quot;${ant.java.version}&quot;, but version &quot;17&quot; is expected!">
+        <condition>
+            <not><equals arg1="${ant.java.version}" arg2="17"/></not>
+        </condition>
+    </fail>
+
     <property environment="env"/>
     <property name="base" location="."/>
     <property name="src" location="src"/>
+    <property name="test" location="test"/>
+    <property name="lib" location="lib"/>
     <property name="build" location="bin"/>
     <property name="doc" location="docs"/>
     <property name="dist" location="dist"/>
-
-    <target name="version" description="read the version info">
-        <property file="${base}/version.properties"/>
-        <fail unless="version.major">Property 'version.major' was not found!</fail>
-        <fail unless="version.minor">Property 'version.minor' was not found!</fail>
-        <fail unless="version.patch">Property 'version.patch' was not found!</fail>
-    </target>
-
-    <target name="bootpath" description="determine root class path">
-        <property name="bootclass.path" location="${env.JDK8_PATH}/jre/lib/rt.jar"/>
-        <fail message="boot class path &quot;rt.jar&quot; not found!">
-            <condition>
-                <not><available file="${bootclass.path}"/></not>
-            </condition>
-        </fail>
-    </target>
 
     <target name="init" description="initialize paths">
         <mkdir dir="${build}"/>
@@ -29,12 +21,45 @@
         <mkdir dir="${dist}"/>
     </target>
 
-    <target name="clean" depends="init" description="clean up build files">
-        <delete includeemptydirs="true">
-            <fileset dir="${build}" includes="**/*"/>
-            <fileset dir="${doc}" includes="**/*"/>
-            <fileset dir="${dist}" includes="**/*"/>
-        </delete>
+    <target name="bootpath" description="determine root class path">
+        <fail unless="env.JDK8_BOOT_PATH">Environment variable 'JDK8_BOOT_PATH' not found!</fail>
+        <property name="bootclass.path" location="${env.JDK8_BOOT_PATH}"/>
+        <fail message="JDK 1.8 boot class path &quot;${env.JDK8_BOOT_PATH}&quot; not found!">
+            <condition>
+                <not><available file="${bootclass.path}"/></not>
+            </condition>
+        </fail>
+    </target>
+
+    <target name="compile" depends="init,bootpath" description="compile the source">
+        <javac srcdir="${src}" destdir="${build}" bootclasspath="${bootclass.path}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
+    </target>
+
+    <target name="test" depends="compile" description="compile and run all junit tests">
+        <path id="test.classpath">
+            <fileset dir="${lib}" includes="*.jar"/>
+            <pathelement path="${build}"/>
+        </path>
+        <javac srcdir="${test}" destdir="${build}" includeantruntime="false" debug="on" verbose="true">
+            <classpath refid="test.classpath"/>
+        </javac>
+        <junitlauncher haltOnFailure="true" printSummary="true">
+            <classpath refid="test.classpath"/>
+            <testclasses outputdir="${java.io.tmpdir}">
+                <fork dir="${base}"/>
+                <fileset dir="${build}" includes="**/test/*Test.class" excludes="**/Abstract*.class"/>
+                <listener type="legacy-brief" sendSysOut="true"/>
+            </testclasses>
+        </junitlauncher>
+    </target>
+
+    <target name="version" depends="compile" description="read the version info">
+        <loadproperties encoding="iso-8859-1" prefix="sqlitemap" srcfile="${build}/com/muldersoft/container/sqlite/SQLiteMap.class">
+            <filterchain><classconstants/></filterchain>
+        </loadproperties>
+        <fail unless="sqlitemap.VERSION_MAJOR">Property 'VERSION_MAJOR' was not found!</fail>
+        <fail unless="sqlitemap.VERSION_MINOR">Property 'VERSION_MINOR' was not found!</fail>
+        <fail unless="sqlitemap.VERSION_PATCH">Property 'VERSION_PATCH' was not found!</fail>
     </target>
 
     <target name="doc" depends="init,bootpath" description="generate documentation">
@@ -43,15 +68,11 @@
         </javadoc>
     </target>
 
-    <target name="compile" depends="init,bootpath" description="compile the source">
-        <javac srcdir="${src}" destdir="${build}" bootclasspath="${bootclass.path}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
-    </target>
-
-    <target name="dist" depends="clean,version,compile,doc" description="generate the distribution">
+    <target name="dist" depends="clean,version,doc" description="generate the distribution">
         <local name="version"/>
-        <property name="version" value="${version.major}.${version.minor}.${version.patch}"/>
+        <property name="version" value="${sqlitemap.VERSION_MAJOR}.${sqlitemap.VERSION_MINOR}.${sqlitemap.VERSION_PATCH}"/>
         <jar jarfile="${dist}/sqlite-map-${version}.jar">
-            <fileset dir="${build}" includes="**/*.class"/>
+            <fileset dir="${build}" includes="**/*.class" excludes="**/test/**"/>
             <fileset file="${base}/LICENSE.txt"/>
         </jar>
         <jar jarfile="${dist}/sqlite-map-${version}-sources.jar">
@@ -62,11 +83,19 @@
             <fileset dir="${doc}" includes="**/*"/>
             <fileset file="${base}/LICENSE.txt"/>
         </jar>
-        <zip destfile="${dist}/sqlite-map-${version}.zip">
+        <zip destfile="${dist}/sqlite-map-${version}-bin.zip">
             <fileset dir="${dist}" includes="*.jar"/>
             <zipfileset prefix="docs" dir="${doc}" includes="**/*"/>
             <fileset file="${base}/README.md"/>
             <fileset file="${base}/LICENSE.txt"/>
         </zip>
+    </target>
+
+    <target name="clean" depends="init" description="clean up build files">
+        <delete includeemptydirs="true" verbose="true">
+            <fileset dir="${build}" includes="**/*" excludes=".gitkeep"/>
+            <fileset dir="${doc}" includes="**/*" excludes=".gitkeep"/>
+            <fileset dir="${dist}" includes="**/*" excludes=".gitkeep"/>
+        </delete>
     </target>
 </project>

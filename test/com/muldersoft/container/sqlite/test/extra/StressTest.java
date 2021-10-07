@@ -7,17 +7,18 @@
  * If not, please refer to:
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
-package com.muldersoft.container.sqlite.test;
+package com.muldersoft.container.sqlite.test.extra;
 
 import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Map.Entry;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.muldersoft.container.sqlite.SQLiteMap;
 
-public class Main {
+public class StressTest {
 
     private static final int LIMIT = 100000000;
     private static final int UPDATE_INTERVAL = 1000;
@@ -25,7 +26,7 @@ public class Main {
 
     private static final char[] HEX_CHARS = "0123456789ABCDEF".toCharArray();
 
-    public static void main(String[] args)  throws Exception {
+    public static void main(String[] args) throws Exception {
         final ThreadLocalRandom random = ThreadLocalRandom.current();
         final byte[] buffer = new byte[32];
         final MutableEntry<String, String>[] data = allocateArray(BATCH_SIZE);
@@ -42,7 +43,7 @@ public class Main {
                         random.nextBytes(buffer);
                         data[i].setValue(bytesToHex(buffer));
                     }
-                    map.putAll(list);
+                    map.putAll0(list);
                     if ((currentTime = System.currentTimeMillis()) >= nextUpdate) {
                         System.out.printf("%,d%n", map.size());
                         nextUpdate = currentTime + UPDATE_INTERVAL;
@@ -85,5 +86,33 @@ public class Main {
             array[i] = new MutableEntry<K, V>();
         }
         return array;
+    }
+
+    private static class MutableEntry<K,V> implements Entry<K,V> {
+        private K key;
+        private V value;
+
+        @Override
+        public K getKey() {
+            return key;
+        }
+
+        @Override
+        public V getValue() {
+            return value;
+        }
+
+        public K setKey(final K key) {
+            final K oldKey = this.key;
+            this.key = Objects.requireNonNull(key);
+            return oldKey;
+        }
+
+        @Override
+        public V setValue(final V value) {
+            final V oldValue = this.value;
+            this.value = Objects.requireNonNull(value);
+            return oldValue;
+        }
     }
 }

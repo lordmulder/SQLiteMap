@@ -2,6 +2,8 @@
 
 The **`SQLiteMap`** class provides a map implementation that is backed by an [SQLite](https://www.sqlite.org/) database. It can employ an "in-memory" database or a local database file. Compared to Java's standard `HashMap` class, the *"in-memory"* variant of `SQLiteMap` is better suited for very large maps; it has a smaller memory footprint and does **not** clutter the Java heap space. The *file-based* variant of `SQLiteMap` can handle even bigger maps and provides full persistence.
 
+`SQLiteMap` is compatible with JDK 8 or later. We recommend using OpenJDK builds provided by [Adoptium.net](https://adoptium.net/).
+
 
 ## Getting started
 
@@ -22,12 +24,26 @@ This example shows how to create and use an "in-memory" **`SQLiteMap`** instance
       }
     }
 
-&#128161; Please see the **documentation** (Javadoc) for details!
+&#128073; Please see the included **documentation** (Javadoc) for details!
 
 
 ## Dependencies
 
-`SQLiteMap` is compatible with JDK 8 or later. It requires the [**SQLite JDBC Driver**](https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc) to be available.
+### *Runtime* dependencies:
+
+`SQLiteMap` requires the [**SQLite JDBC Driver**](https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc), version 3.36 or newer, to be available in the classpath at runtime!
+
+### *Build* dependencies:
+
+The provided [*Ant*](https://ant.apache.org/) buildfile (`build.xml`) requires [**Apache Commons BCEL**](https://mvnrepository.com/artifact/org.apache.bcel/bcel) to be available in Ant's classpath!
+
+A simple way to achieve this is copying the JAR file into your `%ANT_HOME%/lib` directory.
+
+### *Test* dependencies:
+
+In order to run the tests, the [**JUnit 5**](https://junit.org/junit5/) platform and "junit-jupiter" engine libraries must be available in the classpath!
+
+Please see [*here*](https://ant.apache.org/manual/Tasks/junitlauncher.html) for a list of the required JAR files. These files should be located in the `lib` directory.
 
 
 ## License

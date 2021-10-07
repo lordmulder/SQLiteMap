@@ -108,7 +108,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
         }
 
         @Override
-        public void close() throws Exception {
+        public void close() {
             try {
                 iter.close();
             } catch (final SQLiteMapException e) {
@@ -125,10 +125,14 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
         this.map = Objects.requireNonNull(map, "Map must not be null!");
     }
 
+    // ======================================================================
+    // Public Static Methods
+    // ======================================================================
+
     /**
      * Creates a new {@code SQLiteSet} instance that is backed by an in-memory database.
      * <p>
-     * The {@code SQLiteSet} returned by this method <i>does</i> drop the table when calling {@link close}.
+     * The {@code SQLiteSet} returned by this method operates on a <i>unique</i> database table and drops that table when calling {@link close}.
      *
      * @param elementType the type of the elements stored in the set
      * @return the new {@code SQLSQLiteSetiteSet} instance
@@ -142,9 +146,25 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     }
 
     /**
+     * Creates a new {@code SQLiteSet} instance that is backed by a <i>temporary</i> file.
+     * <p>
+     * The {@code SQLiteSet} returned by this method operates on a <i>unique</i> database file (located in the user's {@code TEMP} directory) and deletes that file when calling {@link close}.
+     *
+     * @param elementType the type of the elements stored in the set
+     * @return the new SQLiteSet instance
+     */
+    public static <E> SQLiteSet<E> fromFile(final Class<E> elementType) {
+        try {
+            return new SQLiteSet<E>(SQLiteMap.fromFile(elementType, Boolean.class));
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    /**
      * Creates a new {@code SQLiteSet} instance that is backed by a local database file.
      * <p>
-     * The {@code SQLiteSet} returned by this method does <b>not</b> drop the table when calling {@link close}.
+     * The {@code SQLiteSet} returned by this method does <b>not</b> truncate the existing database table and does <b>not</b> drop the table when calling {@link close}.
      *
      * @param elementType the type of the elements stored in the set
      * @param path the path of the database file that will be used to store the set
@@ -162,7 +182,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     /**
      * Creates a new {@code SQLiteSet} instance that is backed by a local database file.
      * <p>
-     * The {@code SQLiteSet} returned by this method <i>optionally</i> drops the table when calling {@link close}.
+     * The {@code SQLiteSet} returned by this method <i>optionally</i> truncates the existing database table and <i>optionally</i> drops the table when calling {@link close}.
      *
      * @param elementType the type of the elements stored in the set
      * @param path the path of the database file that will be used to store the set
@@ -180,8 +200,47 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     }
 
     // ======================================================================
-    // Public Methods
+    // Public Instance Methods
     // ======================================================================
+
+    /**
+     * Returns the type of elements maintained by this set.
+     *
+     * @return the type of elements maintained by this set
+     */
+    public Class<E> getType() {
+        try {
+            return map.getKeyType();
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    /**
+     * Returns the path of the underlying SQLite database.
+     *
+     * @return if this set is backed by a file-based database, the path of the underlying SQLite database; otherwise {@code null}
+     */
+    public Path getPath() {
+        try {
+            return map.getPath();
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    /**
+     * Returns the name of the underlying SQLite database table.
+     *
+     * @return the name of the underlying SQLite database table.
+     */
+    public String getTableName() {
+        try {
+            return map.getTableName();
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
 
     @Override
     public int size() {
@@ -263,13 +322,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     @Override
     public boolean addAll(final Collection<? extends E> elements) {
         try {
-            boolean result = false;
-            for (final E element : elements) {
-                if (map.put(element, Boolean.TRUE) == null) {
-                    result = true;
-                }
-            }
-            return result;
+            return map.putAll(elements, Boolean.TRUE);
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }
@@ -284,7 +337,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
      */
     public void addAll0(final Collection<? extends E> elements) {
         try {
-            map.putAll(elements, Boolean.TRUE);
+            map.putAll0(elements, Boolean.TRUE);
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }
@@ -348,15 +401,6 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     }
 
     @Override
-    public void close() {
-        try {
-            map.clear();
-        } catch (final SQLiteMapException e) {
-            throw new SQLiteSetException(e);
-        }
-    }
-
-    @Override
     public int hashCode() {
         try {
             return map.hashCode();
@@ -370,11 +414,24 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
         try {
             if (o == this) {
                 return true;
-            } else if (o instanceof SQLiteSet) {
-                return map.equals(((SQLiteSet<?>)o).map);
-            } else {
+            } else if (!(o instanceof Set)) {
                 return false;
+            } else {
+                final Set<?> elements = (Set<?>)o;
+                if (map.sizeLong() != elements.size()) {
+                    return false;
+                }
+                return map.containsAllKeys(elements);
             }
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    @Override
+    public void close() {
+        try {
+            map.close();
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }

@@ -9,9 +9,12 @@
  */
 package com.muldersoft.container.sqlite;
 
+import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -70,16 +73,16 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private static final short VERSION_MINOR = 0;
     private static final short VERSION_PATCH = 0;
 
-    /**
-     * Returns the <i>major</i>, <i>minor</i> and <i>patch</i> version of the {@code SQLiteMap} library.
-     *
-     * @return the {@code short[]} array consisting of {@code { VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH }}
-     */
-    public static short[] getVersion() {
-        return new short[] { VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH };
-    }
+    private static final String SQLITE_JDBC_DRIVER = "org.sqlite.JDBC";
+    private static final String SQLITE_JDBC_PREFIX = "jdbc:sqlite:";
+    private static final String SQLITE_INMEMORY_DB = ":memory:";
+    private static final String SQLITE_NAME_PREFIX = String.format("SQLiteMap-%d:", VERSION_MAJOR);
+
+    private static final Pattern REGEX_TABLE_NAME = Pattern.compile("\\w+");
 
     private static final int MAXIMUM_BATCH_SIZE = 256;
+
+    private static final String EMPTY_STRING = new String();
 
     // ======================================================================
     // Instance Variables
@@ -90,24 +93,25 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private final Type<K> typeK;
     private final Type<V> typeV;
 
-    private final String tableName;
-    private final boolean isTemporary;
+    private final String dbTableName;
+    private final Path dbFilePath;
+    private final boolean deleteFile;
+    private final boolean dropTable;
 
     private SQLiteMapEntrySet entrySet = null;
     private SQLiteMapKeySet keySet = null;
     private SQLiteMapValueCollection valueCollection = null;
 
-    private int hashCode = 0, pendingIterators = 0;
-    private long modifyCount = 0L, hashCodeLastModified = -1L;
+    private long modifyCount;
+    private int pendingIterators = 0;
 
-    private Deque<AutoCloseable> cleanUpQueue = new ArrayDeque<AutoCloseable>();
+    private final Deque<AutoCloseable> cleanUpQueue = new ArrayDeque<AutoCloseable>();
 
     // ======================================================================
     // SQL Statements
     // ======================================================================
 
-    private static final Pattern REGEX_TABLE_NAME = Pattern.compile("[\\w\\.!$@#]+");
-
+    private static final String SQL_JOURNAL_MODE  = "PRAGMA journal_mode=%s;";
     private static final String SQL_CREATE_TABLE  = "CREATE TABLE IF NOT EXISTS `%s` (key %s CONSTRAINT pk_key PRIMARY KEY, value %s NOT NULL);";
     private static final String SQL_DESTROY_TABLE = "DROP TABLE `%s`;";
     private static final String SQL_CREATE_INDEX  = "CREATE INDEX IF NOT EXISTS `%1$s~index` ON `%1$s` (value);";
@@ -121,6 +125,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private static final String SQL_UPSERT_ENTRY  = "INSERT INTO `%s` (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
     private static final String SQL_UPDATE_ENTRY  = "UPDATE `%s` SET value = ? WHERE key = ?;";
     private static final String SQL_REMOVE_ENTRY  = "DELETE FROM `%s` WHERE key = ?;";
+    private static final String SQL_REMOVE_ENTRY0 = "DELETE FROM `%s` WHERE key = ? AND value = ?;";
     private static final String SQL_CLEAR_ENTRIES = "DELETE FROM `%s`;";
     private static final String SQL_COUNT_ENTRIES = "SELECT COUNT(*) FROM `%s`;";
     private static final String SQL_COUNT_KEYS    = "SELECT COUNT(*) FROM `%s` WHERE key = ?;";
@@ -135,6 +140,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private final PreparedStatementHolder sqlUpsertEntry  = new PreparedStatementHolder(SQL_UPSERT_ENTRY);
     private final PreparedStatementHolder sqlUpdateEntry  = new PreparedStatementHolder(SQL_UPDATE_ENTRY);
     private final PreparedStatementHolder sqlRemoveEntry  = new PreparedStatementHolder(SQL_REMOVE_ENTRY);
+    private final PreparedStatementHolder sqlRemoveEntry0 = new PreparedStatementHolder(SQL_REMOVE_ENTRY0);
     private final PreparedStatementHolder sqlClearEntries = new PreparedStatementHolder(SQL_CLEAR_ENTRIES);
     private final PreparedStatementHolder sqlCountEntries = new PreparedStatementHolder(SQL_COUNT_ENTRIES);
     private final PreparedStatementHolder sqlCountKeys    = new PreparedStatementHolder(SQL_COUNT_KEYS);
@@ -153,7 +159,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         public PreparedStatement getInstance() {
             if (statement == null) {
                 try {
-                    statement = connection.prepareStatement(String.format(sql, tableName));
+                    statement = connection.prepareStatement(String.format(sql, dbTableName));
                 } catch (final Exception e) {
                     throw new SQLiteMapException("Failed to prepare SQL statement!", e);
                 }
@@ -482,7 +488,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
         @Override
         public int hashCode() {
-            return (65599 * typeK.hashCode(key)) + typeV.hashCode(value);
+            return typeK.hashCode(key) ^ typeV.hashCode(value);
         }
 
         @Override
@@ -799,29 +805,12 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     public class SQLiteMapEntrySet extends SQLiteMapAbstractSet<Entry<K, V>> {
         @Override
         public boolean contains(final Object o) {
-            if (o instanceof Entry) {
-                final Entry<?, ?> entry = (Entry<?, ?>) o;
-                final V value = SQLiteMap.this.get(entry.getKey());
-                if (value != null) {
-                    return typeV.equals(value, entry.getValue());
-                }
-            }
-            return false;
+            return SQLiteMap.this.containsEntry(o);
         }
 
         @Override
         public boolean containsAll(final Collection<?> c) {
-            for (final Object o : c) {
-                if (o instanceof Entry) {
-                    final Entry<?, ?> entry = (Entry<?, ?>) o;
-                    final V value = SQLiteMap.this.get(entry.getKey());
-                    if ((value != null) && typeV.equals(value, entry.getValue())) {
-                        continue;
-                    }
-                }
-                return false;
-            }
-            return true;
+            return SQLiteMap.this.containsAllEntries(c);
         }
 
         @Override
@@ -835,38 +824,35 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     // ======================================================================
 
     static {
-        final String SQLITE_DRIVER = "org.sqlite.JDBC";
         try {
-            Class.forName(SQLITE_DRIVER);
-        } catch (final ClassNotFoundException e) {
-            throw new RuntimeException("Failed to initialize SQLite JDBC driver!");
+            Class.forName(SQLITE_JDBC_DRIVER);
+            final Driver driver = Objects.requireNonNull(DriverManager.getDriver(SQLITE_JDBC_PREFIX), "Failed to obtain the SQLite JDBC driver instance from driver manager!");
+            if ((driver.getMajorVersion() != 3) || (driver.getMinorVersion() < 36)) {
+                throw new AssertionError(String.format("SQLite JDBC driver appears to be an unsupported version! [version: %d.%d, min. required: 3.36]", driver.getMajorVersion(), driver.getMinorVersion()));
+            }
+        } catch (final Throwable e) {
+            throw new LinkageError("Failed to initialize the SQLite JDBC driver!", e);
         }
     }
 
     private SQLiteMap(final Type<K> typeK, final Type<V> typeV) {
-        this(typeK, typeV, null, null, false, true);
+        this(typeK, typeV, null, null, false, true, false);
     }
 
-    private SQLiteMap(final Type<K> typeK, final Type<V> typeV, final Path path, final String tableName, final boolean truncate, final boolean temporary) {
+    private SQLiteMap(final Type<K> typeK, final Type<V> typeV, final Path dbFilePath, final String dbTableName, final boolean truncate, final boolean dropTable, final boolean deleteFile) {
         this.typeK = Objects.requireNonNull(typeK, "typeK");
         this.typeV = Objects.requireNonNull(typeV, "typeV");
-        this.isTemporary = temporary;
-        if ((tableName != null) && (!REGEX_TABLE_NAME.matcher(tableName).matches())) {
-            throw new IllegalArgumentException("Illgeal table name!");
-        }
-        this.tableName = (tableName != null) ? tableName : String.format("%s$%08X", getClass().getName(), System.identityHashCode(this));
+        this.dbFilePath = dbFilePath;
+        this.dropTable = dropTable;
+        this.deleteFile = deleteFile;
+        this.dbTableName = createTableName(this, dbTableName);
         try {
-            connection = DriverManager.getConnection(String.format("jdbc:sqlite:%s", (path != null) ? path.toString() : ":memory:"));
+            connection = DriverManager.getConnection(SQLITE_JDBC_PREFIX.concat((dbFilePath != null) ? dbFilePath.toString() : SQLITE_INMEMORY_DB));
         } catch (final SQLException e) {
             throw new SQLiteMapException("Failed to create SQLite connection!", e);
         }
         try {
-            if (path != null) {
-                try (final Statement statement = connection.createStatement()) {
-                    statement.executeUpdate("PRAGMA journal_mode=WAL;");
-                }
-            }
-            createSQLiteTable(truncate);
+            createSQLiteTable(truncate, dbFilePath != null);
         } catch (final Exception e) {
             try {
                 close(); /*avoid resource leak on exception in constructor!*/
@@ -874,6 +860,10 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             throw new SQLiteMapException("Initialization of SQLite table has failed!", e);
         }
     }
+
+    // ======================================================================
+    // Public Static Methods
+    // ======================================================================
 
     /**
      * Creates a new <b>{@code SQLiteMap}</b> instance that is backed by an in-memory database.
@@ -886,6 +876,19 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      */
     public static <K,V> SQLiteMap<K,V> fromMemory(final Class<K> keyType, final Class<V> valueType) {
         return new SQLiteMap<K, V>(typeOf(keyType), typeOf(valueType));
+    }
+
+    /**
+     * Creates a new <b>{@code SQLiteMap}</b> instance that is backed by a <i>temporary</i> file.
+     * <p>
+     * The {@code SQLiteMap} returned by this method operates on a <i>unique</i> database file (located in the user's {@code TEMP} directory) and deletes that file when calling {@link close}.
+     *
+     * @param keyType the type of the keys stored in the map
+     * @param valueType the type of the values stored in the map
+     * @return the new {@link SQLiteMap} instance
+     */
+    public static <K,V> SQLiteMap<K,V> fromFile(final Class<K> keyType, final Class<V> valueType) {
+        return new SQLiteMap<K, V>(typeOf(keyType), typeOf(valueType), createTemporaryFile(), null, false, true, true);
     }
 
     /**
@@ -919,12 +922,57 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     public static <K,V> SQLiteMap<K,V> fromFile(final Class<K> keyType, final Class<V> valueType, final Path path, final String tableName, final boolean truncate, final boolean temporary) {
         Objects.requireNonNull(path, "Path must not be null!");
         Objects.requireNonNull(tableName, "Table name must not be null!");
-        return new SQLiteMap<K, V>(typeOf(keyType), typeOf(valueType), path, tableName, truncate, temporary);
+        return new SQLiteMap<K, V>(typeOf(keyType), typeOf(valueType), path, tableName, truncate, temporary, false);
+    }
+
+    /**
+     * Returns the <i>major</i>, <i>minor</i> and <i>patch</i> version of the {@code SQLiteMap} library.
+     *
+     * @return the {@code short[]} array consisting of {@code { VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH }}
+     */
+    public static short[] getVersion() {
+        return new short[] { VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH };
     }
 
     // ======================================================================
-    // Public Methods
+    // Public Instance Methods
     // ======================================================================
+
+    /**
+     * Returns the type of keys maintained by this map.
+     *
+     * @return the type of keys maintained by this map
+     */
+    public Class<K> getKeyType() {
+        return typeK.getUnderlyingType();
+    }
+
+    /**
+     * Returns the type of mapped values.
+     *
+     * @return the type of mapped values
+     */
+    public Class<V> getValueType() {
+        return typeV.getUnderlyingType();
+    }
+
+    /**
+     * Returns the path of the underlying SQLite database.
+     *
+     * @return if this map is backed by a file-based database, the path of the underlying SQLite database; otherwise {@code null}
+     */
+    public Path getPath() {
+        return dbFilePath;
+    }
+
+    /**
+     * Returns the name of the underlying SQLite database table.
+     *
+     * @return the name of the underlying SQLite database table.
+     */
+    public String getTableName() {
+        return dbTableName;
+    }
 
     @Override
     public boolean containsKey(final Object key) {
@@ -1003,6 +1051,59 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             });
         } catch(final Exception e) {
             throw new SQLiteMapException("Failed to determine if values exist!", e);
+        }
+    }
+
+    /**
+     * Tests whether this map contains the specified entry.
+     *
+     * @param entry key-value pair whose presence in this map is to be tested
+     * @return {@code true} if this map contains the specified key-value pair
+     */
+    public boolean containsEntry(final Object o) {
+        if (!(o instanceof Entry)) {
+            return false;
+        }
+        ensureConnectionNotClosed();
+        try {
+            final Entry<?, ?> entry;
+            final K key = typeK.fromObject((entry  = (Entry<?, ?>)o).getKey());
+            if (key != null) {
+                return typeV.equals(fetchEntry(key), entry.getValue());
+            }
+            return false;
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to determine if entry exists!", e);
+        }
+    }
+
+    /**
+     * A version of {@link containsEntry} that tests <i>multiple</i> entries.
+     * <p>
+     * This method is a performance optimization and should be preferred whenever <i>multiple</i> entries need to be tested.
+     *
+     * @param entries collection of entries whose presence in this map is to be tested
+     * @return {@code true} if this map contains all the specified entries
+     */
+    public boolean containsAllEntries(final Collection<?> entries) {
+        Objects.requireNonNull(entries, "Collection must not be null!");
+        ensureConnectionNotClosed();
+        try {
+            return transaction(connection, () -> {
+                for (final Object o : entries) {
+                    if (!(o instanceof Entry)) {
+                        return false;
+                    }
+                    final Entry<?, ?> entry;
+                    final K key = typeK.fromObject((entry  = (Entry<?, ?>)o).getKey());
+                    if ((key == null) || (!typeV.equals(fetchEntry(key), entry.getValue()))) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+        } catch(final Exception e) {
+            throw new SQLiteMapException("Failed to determine if entries exist!", e);
         }
     }
 
@@ -1124,8 +1225,65 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      * This method is a performance optimization and should be preferred whenever <i>multiple</i> key-value pairs need to be inserted.
      *
      * @param entries a collection containing the key-value pairs to be added to the map
+     * @return {@code true} if the key set of this map changed as a result of the call
      */
-    public void putAll(final Collection<? extends Entry<? extends K, ? extends V>> entries) {
+    public boolean putAll(final Collection<? extends Entry<? extends K, ? extends V>> entries) {
+        Objects.requireNonNull(entries, "Collection must not be null!");
+        ensureConnectionNotClosed();
+        try {
+            return transaction(connection, () -> {
+                boolean result = false;
+                for (final Entry<? extends K, ? extends V> entry : entries) {
+                    final K key = entry.getKey();
+                    if (countKeys(key) <= 0) {
+                        result = true;
+                    }
+                    upsertEntry(key, entry.getValue());
+                }
+                return result;
+            });
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to store new key-value pairs!", e);
+        }
+    }
+
+    /**
+     * Add <i>multiple</i> key-value pairs to the map, using a "batch" insert operation.
+     * <p>
+     * This method is a performance optimization and should be preferred whenever <i>multiple</i> key-value pairs need to be inserted.
+     *
+     * @param keys a collection containing the keys to be added to the map
+     * @param value value to be associated with the specified keys
+     * @return {@code true} if the key set of this map changed as a result of the call
+     */
+    public boolean putAll(final Collection<? extends K> keys, final V value) {
+        Objects.requireNonNull(keys, "Keys must not be null!");
+        Objects.requireNonNull(value, "Value must not be null!");
+        ensureConnectionNotClosed();
+        try {
+            return transaction(connection, () -> {
+                boolean result = false;
+                for (final K key : keys) {
+                    if (countKeys(key) <= 0) {
+                        result = true;
+                    }
+                    upsertEntry(key, value);
+                }
+                return result;
+            });
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to store new key-value pairs!", e);
+        }
+    }
+
+    /**
+     * Add <i>multiple</i> key-value pairs to the map, using a "batch" insert operation.
+     * <p>
+     * This method is a performance optimization and should be preferred whenever <i>multiple</i> key-value pairs need to be inserted.
+     *
+     * @param entries a collection containing the key-value pairs to be added to the map
+     */
+    public void putAll0(final Collection<? extends Entry<? extends K, ? extends V>> entries) {
         Objects.requireNonNull(entries, "Collection must not be null!");
         ensureConnectionNotClosed();
         try {
@@ -1143,7 +1301,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      * @param keys a collection containing the keys to be added to the map
      * @param value value to be associated with the specified keys
      */
-    public void putAll(final Collection<? extends K> keys, final V value) {
+    public void putAll0(final Collection<? extends K> keys, final V value) {
         Objects.requireNonNull(keys, "Keys must not be null!");
         Objects.requireNonNull(value, "Value must not be null!");
         ensureConnectionNotClosed();
@@ -1337,6 +1495,27 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     /**
+     * A version of {@link remove} that does <b>not</b> return a result.
+     * <p>
+     * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
+     *
+     * @param key key whose mapping is to be removed from the map
+     * @param value value expected to be associated with the specified key
+     */
+    public void remove0(Object key, final Object value) {
+        final K typedKey = typeK.fromObject(key);
+        if (typedKey == null) {
+            return;
+        }
+        ensureConnectionNotClosed();
+        try {
+            removeEntry(typedKey, typeV.fromObject(value));
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to remove key-value pair!", e);
+        }
+    }
+
+    /**
      * A version of {@link remove} that removes <i>multiple</i> keys.
      * <p>
      * This method is a performance optimization and should be preferred whenever <i>multiple</i> keys need to be removed.
@@ -1391,10 +1570,10 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     @Override
     public void clear() {
         ensureConnectionNotClosed();
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlClearEntries.getInstance();
         try {
             preparedStatement.executeUpdate();
-            ++modifyCount;
         } catch(final Exception e) {
             throw new SQLiteMapException("Failed to clear existing key-value pairs!", e);
         }
@@ -1427,11 +1606,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     @Override
     public void forEach(final BiConsumer<? super K, ? super V> action) {
         Objects.requireNonNull(action);
-        try (final SQLiteMapEntryIterator iterator = iterator()) {
-            while(iterator.hasNext()) {
-                final Entry<K, V> entry = iterator.next();
-                action.accept(entry.getKey(), entry.getValue());
-            }
+        try {
+            transaction(connection, () -> {
+                try (final SQLiteMapEntryIterator iterator = iterator()) {
+                    while(iterator.hasNext()) {
+                        final Entry<K, V> entry = iterator.next();
+                        action.accept(entry.getKey(), entry.getValue());
+                    }
+                }
+            });
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to iterate all key-value pairs!", e);
         }
     }
 
@@ -1455,13 +1640,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     public long sizeLong() {
         ensureConnectionNotClosed();
         try {
-            final long count = countEntries();
-            if (count < 0) {
+            final long size = countEntries();
+            if (size < 0) {
                 throw new IllegalStateException("Entry count could not be determined!");
             }
-            return count;
-        } catch(final Exception e) {
-            throw new SQLiteMapException("Failed to count the number of key-value pairs!", e);
+            return size;
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to compute new size!", e);
         }
     }
 
@@ -1551,16 +1736,10 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         if (o == this)
             return true;
         else if (o instanceof Map) {
-            final Map<?, ?> map = (Map<?, ?>) o;
-            try (final SQLiteMapEntryIterator iter = iterator()) {
-                while(iter.hasNext()) {
-                    final Entry<K, V> current = iter.next();
-                    final Object value = map.get(current.getKey());
-                    if ((value == null) || (!typeV.equals(current.getValue(), value))) {
-                        return false;
-                    }
-                }
-                return true;
+            try {
+                return transaction(connection, () -> checkEquals((Map<?, ?>)o));
+            } catch (final Exception e) {
+                throw new SQLiteMapException("Failed to test maps for equality!", e);
             }
         } else {
             return false;
@@ -1570,17 +1749,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     @Override
     public int hashCode() {
         ensureConnectionNotClosed();
-        if (hashCodeLastModified != modifyCount) {
-            try (final SQLiteMapEntryIterator iter = iterator()) {
-                int hashCode = 0;
-                while(iter.hasNext()) {
-                    hashCode += iter.next().hashCode();
-                }
-                this.hashCode = hashCode;
-                hashCodeLastModified = modifyCount;
-            }
+        try {
+            return transaction(connection, this::computeHash);
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to compute new hash code!", e);
         }
-        return hashCode;
     }
 
     /**
@@ -1638,16 +1811,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         }
     }
 
-    private void createSQLiteTable(final boolean truncate) {
+    private void createSQLiteTable(final boolean truncate, final boolean fileBased) {
         try (final Statement statement = connection.createStatement()) {
-            statement.executeUpdate(String.format(SQL_CREATE_TABLE, tableName, typeK.typeName(), typeV.typeName()));
+            statement.executeUpdate(String.format(SQL_JOURNAL_MODE, fileBased ? "WAL" : "MEMORY"));
+            statement.executeUpdate(String.format(SQL_CREATE_TABLE, dbTableName, typeK.typeName(), typeV.typeName()));
             if (truncate) {
-                statement.executeUpdate(String.format(SQL_CLEAR_ENTRIES, tableName));
+                statement.executeUpdate(String.format(SQL_CLEAR_ENTRIES, dbTableName));
             }
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to create SQLitabe table!", e);
         }
-        try (final ResultSet result = connection.getMetaData().getColumns(null, null, tableName, null)) {
+        try (final ResultSet result = connection.getMetaData().getColumns(null, null, dbTableName, null)) {
             int columnCount = 0;
             while(result.next()) {
                 switch(++columnCount) {
@@ -1670,9 +1844,9 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void destroySQLiteTable() {
-        try (final PreparedStatement preparedStatement = connection.prepareStatement(String.format(SQL_DESTROY_TABLE, tableName))) {
+        ++modifyCount;
+        try (final PreparedStatement preparedStatement = connection.prepareStatement(String.format(SQL_DESTROY_TABLE, dbTableName))) {
             preparedStatement.executeUpdate();
-            ++modifyCount;
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to destroy SQLitabe table!", e);
         }
@@ -1744,13 +1918,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void insertEntry(final K key, final V value) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlInsertEntry.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
             try {
                 preparedStatement.executeUpdate();
-                ++modifyCount;
             } finally {
                 preparedStatement.clearParameters();
             }
@@ -1760,13 +1934,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void insertEntryOptional(final K key, final V value) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlInsertEntry0.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
             try {
                 preparedStatement.executeUpdate();
-                ++modifyCount;
             } finally {
                 preparedStatement.clearParameters();
             }
@@ -1776,13 +1950,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void upsertEntry(final K key, final V value) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlUpsertEntry.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
             try {
                 preparedStatement.executeUpdate();
-                ++modifyCount;
             } finally {
                 preparedStatement.clearParameters();
             }
@@ -1792,6 +1966,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void upsertAllEntries(final Collection<? extends Entry<? extends K, ? extends V>> entries) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlUpsertEntry.getInstance();
         try {
             int currentBatchSize = 0;
@@ -1802,13 +1977,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                     preparedStatement.addBatch();
                     if (++currentBatchSize >= MAXIMUM_BATCH_SIZE) {
                         preparedStatement.executeBatch();
-                        ++modifyCount;
                         currentBatchSize = 0;
                     }
                 }
                 if (currentBatchSize > 0) {
                     preparedStatement.executeBatch();
-                    ++modifyCount;
                 }
             } finally {
                 preparedStatement.clearBatch();
@@ -1820,6 +1993,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void upsertAllEntries(final Collection<? extends K> keys, final V value) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlUpsertEntry.getInstance();
         try {
             int currentBatchSize = 0;
@@ -1830,14 +2004,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                     preparedStatement.addBatch();
                     if (++currentBatchSize >= MAXIMUM_BATCH_SIZE) {
                         preparedStatement.executeBatch();
-                        ++modifyCount;
                         currentBatchSize = 0;
                     }
                 }
                 if (currentBatchSize > 0) {
                     preparedStatement.executeBatch();
-                    ++modifyCount;
-
                 }
             } finally {
                 preparedStatement.clearBatch();
@@ -1849,13 +2020,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void updateEntry(final K key, final V value) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlUpdateEntry.getInstance();
         try {
             typeK.setParameter(preparedStatement, 2, key);
             typeV.setParameter(preparedStatement, 1, value);
             try {
                 preparedStatement.executeUpdate();
-                ++modifyCount;
             } finally {
                 preparedStatement.clearParameters();
             }
@@ -1865,12 +2036,12 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private void removeEntry(final K key) {
+        ++modifyCount;
         final PreparedStatement preparedStatement = sqlRemoveEntry.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             try {
                 preparedStatement.executeUpdate();
-                ++modifyCount;
            } finally {
                 preparedStatement.clearParameters();
             }
@@ -1879,7 +2050,52 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         }
     }
 
-    private void doFinalCleanUp() throws SQLException{
+    private void removeEntry(final K key, final V value) {
+        ++modifyCount;
+        final PreparedStatement preparedStatement = sqlRemoveEntry0.getInstance();
+        try {
+            typeK.setParameter(preparedStatement, 1, key);
+            typeV.setParameter(preparedStatement, 2, value);
+            try {
+                preparedStatement.executeUpdate();
+           } finally {
+                preparedStatement.clearParameters();
+            }
+        } catch (final SQLException e) {
+            throw new SQLiteMapException("Failed to remove the key-value pair!", e);
+        }
+    }
+
+    private int computeHash() {
+        try (final SQLiteMapEntryIterator iter = iterator()) {
+            int hashCode = 0;
+            while(iter.hasNext()) {
+                hashCode += iter.next().hashCode();
+            }
+            return hashCode;
+        }
+    }
+
+    private boolean checkEquals(final Map<?, ?> map) {
+        try (final SQLiteMapEntryIterator iter = iterator()) {
+            while(iter.hasNext()) {
+                final Entry<K, V> current = iter.next();
+                final Object value = map.get(current.getKey());
+                if ((value == null) || (!typeV.equals(current.getValue(), value))) {
+                    return false;
+                }
+            }
+        }
+        for (final Object key : map.keySet()) {
+            final K typedKey = typeK.fromObject(key);
+            if ((typedKey == null) || (countKeys(typedKey) <= 0L)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void doFinalCleanUp() throws SQLException, IOException {
         try {
             try {
                 AutoCloseable obj;
@@ -1889,18 +2105,29 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                     } catch (Exception e) { }
                 }
             } finally {
-                if (isTemporary) {
+                if (dropTable) {
                     destroySQLiteTable();
                 }
             }
         } finally {
             connection.close();
+            if ((dbFilePath != null) && deleteFile) {
+                Files.delete(dbFilePath);
+            }
         }
     }
 
     // --------------------------------------------------------
     // Utility Methods
     // --------------------------------------------------------
+
+    private static String createTableName(final Object instance, final String name) {
+        final String dbTableName = (name != null) ? name.trim() : EMPTY_STRING;
+        if ((!dbTableName.isEmpty()) && (!REGEX_TABLE_NAME.matcher(dbTableName).matches())) {
+            throw new IllegalArgumentException("Illegal table name! ['" + name + "']");
+        }
+        return SQLITE_NAME_PREFIX.concat(dbTableName.isEmpty() ? String.format("%08x", System.identityHashCode(instance)) : dbTableName);
+    }
 
     @SuppressWarnings("unchecked")
     private static <T> Type<T> typeOf(final Class<T> clazz) {
@@ -1927,12 +2154,14 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private static <T> T transaction(final Connection connection, final Callable<T> callable) throws SQLException {
-        final T result;
-        final boolean previous = connection.getAutoCommit();
+        if (!connection.getAutoCommit()) {
+            throw new IllegalStateException("Transaction already in progress!");
+        }
         connection.setAutoCommit(false);
         try {
-            result = callable.call();
+            final T result = callable.call();
             connection.commit();
+            return result;
         } catch (final Exception e) {
             try {
                 connection.rollback(); /*something went wrong!*/
@@ -1942,9 +2171,16 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             throw new SQLException("The transaction has failed!", e);
         } finally {
             try {
-                connection.setAutoCommit(previous);
+                connection.setAutoCommit(true);
             } catch (SQLException e) { }
         }
-        return result;
+    }
+
+    private static Path createTemporaryFile() {
+        try {
+            return Files.createTempFile("sqlitemap-", ".db");
+        } catch (Exception e) {
+            throw new SQLiteMapException("Failed to create temporary file!", e);
+        }
     }
 }
