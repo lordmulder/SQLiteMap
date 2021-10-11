@@ -11,23 +11,29 @@ package com.muldersoft.container.sqlite;
 
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.ConcurrentModificationException;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Spliterator;
+import java.util.function.Consumer;
 
 import com.muldersoft.container.sqlite.SQLiteMap.SQLiteMapException;
 
 /**
- * The {@code SQLiteSet} class provides a set implementation that is backed by an SQLite database. It can employ an "in-memory"
- * database or a local database file. Compared to Java's standard {@code HashSet} class, the "in-memory" variant of
- * {@code SQLiteSet} is better suited for <i>very large</i> sets; it has a smaller memory footprint and does <b>not</b> clutter
- * the Java heap space. The file-based variant of {@code SQLiteSet} can handle even bigger sets and provides full persistence.
+ * The <b>{@code SQLiteSet}</b> class provides a {@link Set} implementation that is backed by an <i>SQLite</i> database. It can
+ * employ an "in-memory" database as well as a local database file. Compared to Java's standard {@code HashSet} class,
+ * the "in-memory" variant of {@code SQLiteSet} is better suited for <i>very large</i> sets; it has a smaller memory footprint
+ * and it does <b>not</b> clutter the Java heap space. The file-based variant of {@code SQLiteSet} provides full persistence.
+ * <p>
+ * {@code SQLiteSet} requires the <a href="https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc">SQLite JDBC Driver</a>,
+ * version 3.36 or newer, to be available in the classpath at runtime!
  * <p>
  * New instances of {@code SQLiteSet} that are backed by an "in-memory" database or by a file-based database can be created by
  * calling the static method {@link #fromMemory fromMemory()} or {@link #fromFile fromFile()}, respectively. Because
- * {@code SQLiteSet} is backed by an SQLite database, the <i>types</i> supported as elements are restricted. For the time
- * being, <i>only</i> the types {@code String}, {@code Boolean}, {@code Byte}, {@code byte[]}, {@code Integer}, {@code Long},
- * {@code Instant} as well as {@code BigInteger} are supported. Other types may be stored via serialization.
+ * {@code SQLiteSet} is backed by an SQLite database, the <i>types</i> supported as keys and values are restricted. For the
+ * time being, <i>only</i> the types {@code String}, {@code Boolean}, {@code Byte}, {@code byte[]}, {@code Integer},
+ * {@code Long}, {@code Instant} as well as {@code BigInteger} are supported. Other types may be stored via serialization.
  * <p>
  * This class is <b>not</b> "thread-safe", in the sense that the <i>same</i> instance of {@code SQLiteSet} <b>must not</b> be
  * accessed concurrently by <i>different</i> threads. However, it is perfectly "safe" to created <i>multiple</i> instances of
@@ -37,10 +43,32 @@ import com.muldersoft.container.sqlite.SQLiteMap.SQLiteMapException;
  * shared across <i>different</i> threads, the application <b>must</b> explicitly <i>synchronize</i> <b>all</b> accesses to
  * that "shared" instance! This includes any iterators, key/entry sets or value collections returned by this class.
  * <p>
- * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
- *
- * @author Created by LoRd_MuldeR &lt;mulder2@gmx.de&gt;
+ * The method {@link iterator} is <b>not</b> "reentrant", in the sense that the iterators created by these method <b>must</b>
+ * explicitly be {@code close()}'d <i>before</i> another iterator  may be created. The methods {@link hashCode},
+ * {@link #equals equals()} and {@link #forEach forEach()} <b>must not</b> be called while an iteration is in progress.
+ * Creating an iterator is <b>not</b> allowed from with a {@link #forEach forEach()} action.
+ * <p>
+ * All iterators returned by this class's iterator methods are <i>"fail-fast"</i>: if the set is modified at any time after the
+ * iterator was created, then the iterator throws a {@link ConcurrentModificationException} when the next element is accessed.
+ * This <i>only</i> applies to modifications induced by the same {@code SQLiteSet} instance. In case that the underlying
+ * database table is modified <i>"externally"</i>, these modifications will <b>not</b> be reflected by the existing iterator!
+ * <p>
+ * The {@link toArray}, {@link #spliterator spliterator()}, {@link #stream stream()} and {@link #parallelStream parallelStream}
+ * methods currently are <b>not</b> supported by this class. 
+ * <p>
+ * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when no longer needed. If an
+ * {@code SQLiteSet} instance is <b>not</b> properly closed, a <i>resource leak</i> occurs, because the underlying database
+ * connection is <i>never</i> closed. Also, if using a "temporary" database table, then that table is <i>not</i> dropped until
+ * the {@code SQLiteSet} instance is closed. This class does <b>not</b> use finalizers to perform the required clean-up,
+ * because finalizers are inherently unreliable and may even hurt performance.
+ * 
  * @param <E> the type of elements maintained by this set
+ * 
+ * @author Created by LoRd_MuldeR &lt;mulder2@gmx.de&gt;
+ * @see <a href="https://github.com/lordmulder/SQLiteMap">SQLiteMap (GitHub project)</a>
+ * @see <a href="https://www.sqlite.org/index.html">SQLite Home Page</a>
+ * @see <a href="https://github.com/xerial/sqlite-jdbc">SQLite JDBC Driver (GitHub project)</a>
+ * @see <a href="https://muldersoft.com/">MuldeR's OpenSource Projects</a>
  */
 public class SQLiteSet<E> implements Set<E>, AutoCloseable {
 
@@ -392,6 +420,15 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     }
 
     @Override
+    public void forEach(final Consumer<? super E> action) {
+        try {
+            map.forEachKey(action);
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    @Override
     public void clear() {
         try {
             map.clear();
@@ -411,18 +448,16 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
 
     @Override
     public boolean equals(final Object o) {
+        if (o == this) {
+            return true;
+        } 
+        if (!(o instanceof Set)) {
+            return false;
+        }
         try {
-            if (o == this) {
-                return true;
-            } else if (!(o instanceof Set)) {
-                return false;
-            } else {
-                final Set<?> elements = (Set<?>)o;
-                if (map.sizeLong() != elements.size()) {
-                    return false;
-                }
-                return map.containsAllKeys(elements);
-            }
+            final Set<?> set = (Set<?>) o;
+            final long size =  (set instanceof SQLiteSet) ? ((SQLiteSet<?>)set).sizeLong() : set.size();
+            return (map.sizeLong() == size) && map.containsAllKeys(set);
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }
@@ -465,6 +500,15 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
      */
     @Override
     public boolean retainAll(Collection<?> c) {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Not currently implemented!
+     * @exception UnsupportedOperationException
+     */
+    @Override
+    public Spliterator<E> spliterator() {
         throw new UnsupportedOperationException();
     }
 }

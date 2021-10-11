@@ -10,11 +10,15 @@
 package com.muldersoft.container.sqlite.test.extra;
 
 import java.lang.reflect.Array;
+import java.nio.ByteBuffer;
+import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 import java.util.Map.Entry;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Objects;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 
 import com.muldersoft.container.sqlite.SQLiteMap;
 
@@ -26,41 +30,55 @@ public class StressTest {
 
     private static final char[] HEX_CHARS = "0123456789ABCDEF".toCharArray();
 
+    // ======================================================================
+    // Main
+    // ======================================================================
+
     public static void main(String[] args) throws Exception {
-        final ThreadLocalRandom random = ThreadLocalRandom.current();
-        final byte[] buffer = new byte[32];
+        final Cipher cipher0 = Cipher.getInstance("AES/ECB/NoPadding");
+        final Cipher cipher1 = Cipher.getInstance("AES/ECB/NoPadding");
+        final SecureRandom secureRandom = new SecureRandom();
+        cipher0.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secureRandom.generateSeed(32), "AES"));
+        cipher1.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secureRandom.generateSeed(32), "AES"));
         final MutableEntry<String, String>[] data = allocateArray(BATCH_SIZE);
         printMemoryStats();
         try (final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             try {
                 final List<MutableEntry<String, String>> list = Arrays.asList(data);
+                final ByteBuffer buffer = ByteBuffer.allocate(16);
                 long currentTime = -1L, nextUpdate = System.currentTimeMillis() + UPDATE_INTERVAL;
-                final long startTime = System.currentTimeMillis();
-                for (int counter = 0; counter < LIMIT; counter += data.length) {
+                final long clockStart = System.currentTimeMillis();
+                for (int counter = 0, spinner = 0; counter < LIMIT; counter += data.length) {
+                    buffer.putInt(12, counter);
                     for (int i = 0; i < data.length; ++i) {
-                        random.nextBytes(buffer);
-                        data[i].setKey(bytesToHex(buffer));
-                        random.nextBytes(buffer);
-                        data[i].setValue(bytesToHex(buffer));
+                        buffer.put(15, (byte)i);
+                        data[i].setKey  (bytesToHex(cipher0.doFinal(buffer.array())));
+                        data[i].setValue(bytesToHex(cipher1.doFinal(buffer.array())));
                     }
                     map.putAll0(list);
                     if ((currentTime = System.currentTimeMillis()) >= nextUpdate) {
                         System.out.printf("%,d%n", map.size());
+                        if (++spinner >= 5) {
+                            printMemoryStats();
+                            spinner = 0;
+                        }
                         nextUpdate = currentTime + UPDATE_INTERVAL;
                     }
                 }
-                final long endTime = System.currentTimeMillis();
-                System.out.printf("Total time: %,d%n", endTime - startTime);
+                final long clockEnd = System.currentTimeMillis();
+                System.out.printf("Total time: %,d%n", clockEnd - clockStart);
             } finally {
-                System.out.println("Completed!");
-                System.out.printf("%,d%n", map.size());
-                printMemoryStats();
+                System.out.printf("Completed!%n%,d%n", map.size());
                 System.gc();
                 printMemoryStats();
                 Thread.sleep(9999);
             }
         }
     }
+
+    // ======================================================================
+    // Private Methods
+    // ======================================================================
 
     private static void printMemoryStats() {
         final Runtime runtime = Runtime.getRuntime();
@@ -87,6 +105,10 @@ public class StressTest {
         }
         return array;
     }
+
+    // ======================================================================
+    // MutableEntry Class
+    // ======================================================================
 
     private static class MutableEntry<K,V> implements Entry<K,V> {
         private K key;

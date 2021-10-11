@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
@@ -399,6 +400,9 @@ public class SQLiteSetTest  extends AbstractTest {
             assertTrue (set.equals(reference));
             set.add0("xzy");
             assertFalse(set.equals(reference));
+            reference.add("lol");
+            assertFalse(set.equals(reference));
+            reference.remove("lol");
             reference.add("xzy");
             assertTrue (set.equals(reference));
             set.remove("bar");
@@ -410,6 +414,49 @@ public class SQLiteSetTest  extends AbstractTest {
 
     @RepeatedTest(5)
     @Order(19)
+    public void testForEach() {
+        final Set<String> entries = new LinkedHashSet<String>();
+        try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
+            for (final String ref : REFERENCE) {
+                set.add0(ref);
+            }
+            set.forEach(e -> entries.add(e));
+        }
+        assertCollectionEq(REFERENCE, entries);
+    }
+
+    @RepeatedTest(5)
+    @Order(20)
+    public void testSpliterator() throws Exception {
+        try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
+            for (final String ref : REFERENCE) {
+                set.add0(ref);
+            }
+            assertThrows(UnsupportedOperationException.class, () -> set.spliterator());
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(21)
+    public void testStream() throws Exception {
+        try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
+            for (final String ref : REFERENCE) {
+                set.add0(ref);
+            }
+            assertThrows(UnsupportedOperationException.class, () -> set.stream());
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(22)
+    public void testClose() throws Exception {
+        final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class);
+        set.close();
+        assertThrows(IllegalStateException.class, () -> set.add("xyz"));
+    }
+
+    @RepeatedTest(5)
+    @Order(23)
     public void testRandomStrings() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");
@@ -436,7 +483,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(20)
+    @Order(24)
     public void testRandomBytes() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");

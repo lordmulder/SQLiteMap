@@ -22,30 +22,35 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
-import java.util.Deque;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Spliterator;
 import java.util.concurrent.Callable;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * The {@code SQLiteMap} class provides a map implementation that is backed by an SQLite database. It can employ an "in-memory"
- * database or a local database file. Compared to Java's standard {@code HashMap} class, the "in-memory" variant of
- * {@code SQLiteMap} is better suited for <i>very large</i> maps; it has a smaller memory footprint and does <b>not</b> clutter
- * the Java heap space. The file-based variant of {@code SQLiteMap} can handle even bigger maps and provides full persistence.
+ * The <b>{@code SQLiteMap}</b> class provides a {@link Map} implementation that is backed by an <i>SQLite</i> database. It can
+ * employ an "in-memory" database as well as a local database file. Compared to Java's standard {@code HashMap} class,
+ * the "in-memory" variant of {@code SQLiteMap} is better suited for <i>very large</i> maps; it has a smaller memory footprint
+ * and it does <b>not</b> clutter the Java heap space. The file-based variant of {@code SQLiteMap} provides full persistence.
+ * <p>
+ * {@code SQLiteMap} requires the <a href="https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc">SQLite JDBC Driver</a>,
+ * version 3.36 or newer, to be available in the classpath at runtime!
  * <p>
  * New instances of {@code SQLiteMap} that are backed by an "in-memory" database or by a file-based database can be created by
  * calling the static method {@link #fromMemory fromMemory()} or {@link #fromFile fromFile()}, respectively. Because
@@ -61,17 +66,40 @@ import java.util.stream.Collectors;
  * shared across <i>different</i> threads, the application <b>must</b> explicitly <i>synchronize</i> <b>all</b> accesses to
  * that "shared" instance! This includes any iterators, key/entry sets or value collections returned by this class.
  * <p>
- * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
+ * The methods {@link iterator}, {@link keyIterator} and {@link valueIterator} as well as the corresponding methods of the view
+ * objects provided by {@link #entrySet()}, {@link #keySet()} and {@link values} are <b>not</b> "reentrant", in the sense that
+ * the iterators created by these methods <b>must</b> explicitly be {@code close()}'d <i>before</i> another iterator  may be
+ * created. The methods {@link hashCode}, {@link #equals equals()} and {@link #forEach forEach()} <b>must not</b> be called
+ * while an iteration is in progress. Creating an iterator is <b>not</b> allowed from with a {@link #forEach forEach()} action.
+ * <p>
+ * All iterators returned by this class's iterator methods are <i>"fail-fast"</i>: if the map is modified at any time after the
+ * iterator was created, then the iterator throws a {@link ConcurrentModificationException} when the next element is accessed.
+ * This <i>only</i> applies to modifications induced by the same {@code SQLiteMap} instance. In case that the underlying
+ * database table is modified <i>"externally"</i>, these modifications will <b>not</b> be reflected by the existing iterator!
+ * <p>
+ * The {@link #merge merge()}, {@link #replaceAll replaceAll()} and {@link spliterator} methods currently are <b>not</b>
+ * supported by this class.
+ * <p>
+ * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when no longer needed. If an
+ * {@code SQLiteMap} instance is <b>not</b> properly closed, a <i>resource leak</i> occurs, because the underlying database
+ * connection is <i>never</i> closed. Also, if using a "temporary" database table, then that table is <i>not</i> dropped until
+ * the {@code SQLiteMap} instance is closed. This class does <b>not</b> use finalizers to perform the required clean-up,
+ * because finalizers are inherently unreliable and may even hurt performance.
  *
- * @author Created by LoRd_MuldeR &lt;mulder2@gmx.de&gt;
  * @param <K> the type of keys maintained by this map
  * @param <V> the type of mapped values
+ *
+ * @author Created by LoRd_MuldeR &lt;mulder2@gmx.de&gt;
+ * @see <a href="https://github.com/lordmulder/SQLiteMap">SQLiteMap (GitHub project)</a>
+ * @see <a href="https://www.sqlite.org/index.html">SQLite Home Page</a>
+ * @see <a href="https://github.com/xerial/sqlite-jdbc">SQLite JDBC Driver (GitHub project)</a>
+ * @see <a href="https://muldersoft.com/">MuldeR's OpenSource Projects</a>
  */
 public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>, AutoCloseable {
 
     private static final short VERSION_MAJOR = 1;
     private static final short VERSION_MINOR = 0;
-    private static final short VERSION_PATCH = 0;
+    private static final short VERSION_PATCH = 1;
 
     private static final String SQLITE_JDBC_DRIVER = "org.sqlite.JDBC";
     private static final String SQLITE_JDBC_PREFIX = "jdbc:sqlite:";
@@ -103,9 +131,9 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private SQLiteMapValueCollection valueCollection = null;
 
     private long modifyCount;
-    private int pendingIterators = 0;
 
-    private final Deque<AutoCloseable> cleanUpQueue = new ArrayDeque<AutoCloseable>();
+    private final Set<Statement> pendingIterators = new LinkedHashSet<Statement>();
+    private final Set<AutoCloseable> cleanUpQueue = new LinkedHashSet<AutoCloseable>();
 
     // ======================================================================
     // SQL Statements
@@ -163,7 +191,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                 } catch (final Exception e) {
                     throw new SQLiteMapException("Failed to prepare SQL statement!", e);
                 }
-                cleanUpQueue.addLast(this);
+                cleanUpQueue.add(this);
             }
             return statement;
         }
@@ -513,14 +541,23 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      */
     protected abstract class SQLiteMapAbstractIterator<T> implements Iterator<T>, AutoCloseable {
         protected final long modifyCount;
+        protected final PreparedStatement statement;
         protected final ResultSet resultSet;
+
         protected int state = 0;
 
-        protected SQLiteMapAbstractIterator(final ResultSet resultSet) {
+        protected SQLiteMapAbstractIterator(final PreparedStatement statement) throws Exception {
             modifyCount = SQLiteMap.this.modifyCount;
-            this.resultSet = Objects.requireNonNull(resultSet);
-            ++pendingIterators;
-            cleanUpQueue.addLast(this);
+            if (!pendingIterators.add(this.statement = Objects.requireNonNull(statement))) {
+                throw new IllegalStateException("Cannot create new iterator while previous iterator is still active!");
+            }
+            try {
+                resultSet = Objects.requireNonNull(statement.executeQuery());
+            } catch (final Exception e) {
+                pendingIterators.remove(statement);
+                throw e;
+            }
+            cleanUpQueue.add(this);
         }
 
         @Override
@@ -571,7 +608,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                 } catch (final SQLException e) {
                     throw new SQLiteMapException("Failed to clean up iterator!", e);
                 } finally {
-                    pendingIterators = Math.max(0, pendingIterators - 1);
+                    pendingIterators.remove(statement);
                     cleanUpQueue.remove(this);
                 }
             }
@@ -584,8 +621,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
      */
     public class SQLiteMapKeyIterator extends SQLiteMapAbstractIterator<K> {
-        private SQLiteMapKeyIterator(final ResultSet result) {
-            super(result);
+        private SQLiteMapKeyIterator(final PreparedStatement statement) throws Exception {
+            super(statement);
         }
 
         @Override
@@ -611,8 +648,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
      */
     public class SQLiteMapValueIterator extends SQLiteMapAbstractIterator<V> {
-        private SQLiteMapValueIterator(final ResultSet result) {
-            super(result);
+        private SQLiteMapValueIterator(final PreparedStatement statement) throws Exception {
+            super(statement);
         }
 
         @Override
@@ -638,8 +675,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
      */
     public class SQLiteMapEntryIterator extends SQLiteMapAbstractIterator<Entry<K, V>> {
-        private SQLiteMapEntryIterator(final ResultSet result) {
-            super(result);
+        private SQLiteMapEntryIterator(final PreparedStatement statement) throws Exception {
+            super(statement);
         }
 
         @Override
@@ -720,6 +757,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         public boolean removeAll(Collection<?> c) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public Spliterator<T> spliterator() {
+            throw new UnsupportedOperationException();
+        }
     }
 
     /**
@@ -751,7 +793,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
          * <p>
          * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
          *
-         * @param key key whose mapping is to be removed from the map
+         * @param o key whose mapping is to be removed from the map
          */
         public void remove0(final Object o) {
             SQLiteMap.this.remove0(o);
@@ -767,7 +809,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
          * <p>
          * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
          *
-         * @param keys collection of keys whose mapping is to be removed from the map
+         * @param c collection of keys whose mapping is to be removed from the map
          */
         public void removeAll0(final Collection<?> c) {
             SQLiteMap.this.removeAll0(c);
@@ -1057,7 +1099,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     /**
      * Tests whether this map contains the specified entry.
      *
-     * @param entry key-value pair whose presence in this map is to be tested
+     * @param o key-value pair whose presence in this map is to be tested
      * @return {@code true} if this map contains the specified key-value pair
      */
     public boolean containsEntry(final Object o) {
@@ -1067,7 +1109,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         ensureConnectionNotClosed();
         try {
             final Entry<?, ?> entry;
-            final K key = typeK.fromObject((entry  = (Entry<?, ?>)o).getKey());
+            final K key = typeK.fromObject((entry = (Entry<?, ?>)o).getKey());
             if (key != null) {
                 return typeV.equals(fetchEntry(key), entry.getValue());
             }
@@ -1621,6 +1663,42 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     @Override
+    public void forEach(final Consumer<? super Entry<K, V>> action) {
+        Objects.requireNonNull(action);
+        try {
+            transaction(connection, () -> {
+                try (final SQLiteMapEntryIterator iterator = iterator()) {
+                    while(iterator.hasNext()) {
+                        action.accept(iterator.next());
+                    }
+                }
+            });
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to iterate all key-value pairs!", e);
+        }
+    }
+
+    /**
+     * Performs the given action for each key in this map.
+     *
+     * @param action the action to be performed for each key
+     */
+    public void forEachKey(final Consumer<? super K> action) {
+        Objects.requireNonNull(action);
+        try {
+            transaction(connection, () -> {
+                try (final SQLiteMapKeyIterator iterator = keyIterator()) {
+                    while(iterator.hasNext()) {
+                        action.accept(iterator.next());
+                    }
+                }
+            });
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to iterate all key-value pairs!", e);
+        }
+    }
+
+    @Override
     public boolean isEmpty() {
         ensureConnectionNotClosed();
         try {
@@ -1665,11 +1743,12 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     @Override
     public SQLiteMapEntryIterator iterator() {
         ensureConnectionNotClosed();
-        checkPendingItertors();
         final PreparedStatement preparedStatement = sqlFetchEntries.getInstance();
         try {
-            return new SQLiteMapEntryIterator(preparedStatement.executeQuery());
-        } catch(final Exception e) {
+            return new SQLiteMapEntryIterator(preparedStatement);
+        } catch (final IllegalStateException e) {
+            throw e; /* do not intercept IllegalStateException */
+        } catch (final Exception e) {
             throw new SQLiteMapException("Failed to query the existing key-value pairs!", e);
         }
     }
@@ -1683,12 +1762,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      */
     public SQLiteMapKeyIterator keyIterator() {
         ensureConnectionNotClosed();
-        checkPendingItertors();
         final PreparedStatement preparedStatement = sqlFetchKeys.getInstance();
         try {
-            return new SQLiteMapKeyIterator(preparedStatement.executeQuery());
-        } catch(final Exception e) {
-            throw new SQLiteMapException("Failed to query the existing key set!", e);
+            return new SQLiteMapKeyIterator(preparedStatement);
+        } catch (final IllegalStateException e) {
+            throw e; /* do not intercept IllegalStateException */
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to query the existing keys!", e);
         }
     }
 
@@ -1701,12 +1781,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      */
     public SQLiteMapValueIterator valueIterator() {
         ensureConnectionNotClosed();
-        checkPendingItertors();
         final PreparedStatement preparedStatement = sqlFetchValues.getInstance();
         try {
-            return new SQLiteMapValueIterator(preparedStatement.executeQuery());
-        } catch(final Exception e) {
-            throw new SQLiteMapException("Failed to query the existing value set!", e);
+            return new SQLiteMapValueIterator(preparedStatement);
+        } catch (final IllegalStateException e) {
+            throw e; /* do not intercept IllegalStateException */
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to query the existing values!", e);
         }
     }
 
@@ -1733,16 +1814,16 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     @Override
     public boolean equals(final Object o) {
         ensureConnectionNotClosed();
-        if (o == this)
+        if (o == this) {
             return true;
-        else if (o instanceof Map) {
-            try {
-                return transaction(connection, () -> checkEquals((Map<?, ?>)o));
-            } catch (final Exception e) {
-                throw new SQLiteMapException("Failed to test maps for equality!", e);
-            }
-        } else {
+        }
+        if (!(o instanceof Map)) {
             return false;
+        }
+        try {
+            return transaction(connection, () -> checkEquals((Map<?, ?>)o));
+        } catch (final Exception e) {
+            throw new SQLiteMapException("Failed to test maps for equality!", e);
         }
     }
 
@@ -1795,6 +1876,15 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * Not currently implemented!
+     * @exception UnsupportedOperationException
+     */
+    @Override
+    public Spliterator<Entry<K, V>> spliterator() {
+        throw new UnsupportedOperationException();
+    }
+
     // ======================================================================
     // Private Methods
     // ======================================================================
@@ -1802,12 +1892,6 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private void ensureConnectionNotClosed() {
         if (connection == null) {
             throw new IllegalStateException("Connection has already been closed!");
-        }
-    }
-
-    private void checkPendingItertors() {
-        if (pendingIterators > 0) {
-            throw new IllegalStateException("Cannot create iterator while iteration is already in progress!");
         }
     }
 
@@ -2077,6 +2161,10 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     private boolean checkEquals(final Map<?, ?> map) {
+        final long size =  (map instanceof SQLiteMap) ? ((SQLiteMap<?, ?>)map).sizeLong() : map.size();
+        if (countEntries() != size) {
+            return false;
+        }
         try (final SQLiteMapEntryIterator iter = iterator()) {
             while(iter.hasNext()) {
                 final Entry<K, V> current = iter.next();
@@ -2086,22 +2174,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                 }
             }
         }
-        for (final Object key : map.keySet()) {
-            final K typedKey = typeK.fromObject(key);
-            if ((typedKey == null) || (countKeys(typedKey) <= 0L)) {
-                return false;
-            }
-        }
         return true;
     }
 
     private void doFinalCleanUp() throws SQLException, IOException {
         try {
             try {
-                AutoCloseable obj;
-                while((obj = cleanUpQueue.pollLast()) != null) {
+                final List<AutoCloseable> reverse = new ArrayList<AutoCloseable>(cleanUpQueue);
+                Collections.reverse(reverse);
+                for (final AutoCloseable resource : reverse) {
                     try {
-                        obj.close();
+                        resource.close();
                     } catch (Exception e) { }
                 }
             } finally {
