@@ -17,12 +17,9 @@ if not exist "%ANT_HOME%\bin\ant.bat" (
 	exit /b 1
 )
 
-set "PATH=%ANT_HOME%\bin;%JAVA_HOME%\bin;%PATH%"
+set "PATH=%ANT_HOME%\bin;%JAVA_HOME%\bin"
 
 call "%ANT_HOME%\bin\ant.bat" %*
-
-echo.
-
 if not %ERRORLEVEL%==0 (
 	echo Error: Something went wrong !!!
 	pause

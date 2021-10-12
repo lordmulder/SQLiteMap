@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<project name="SQLiteMap" default="dist" basedir=".">
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="SQLiteMap" default="all" basedir=".">
     <fail message="Java version is &quot;${ant.java.version}&quot;, but version &quot;17&quot; is expected!">
         <condition>
             <not><equals arg1="${ant.java.version}" arg2="17"/></not>
@@ -15,6 +15,8 @@
     <property name="doc" location="docs"/>
     <property name="dist" location="dist"/>
 
+    <target name="all" depends="clean,dist" description="default target for clean+dist"/>
+
     <target name="init" description="initialize paths">
         <mkdir dir="${build}"/>
         <mkdir dir="${doc}"/>
@@ -29,28 +31,26 @@
                 <not><available file="${bootclass.path}"/></not>
             </condition>
         </fail>
+        <echo message="JDK8_BOOT_PATH: &quot;${bootclass.path}&quot;"/>
     </target>
 
     <target name="compile" depends="init,bootpath" description="compile the source">
         <javac srcdir="${src}" destdir="${build}" bootclasspath="${bootclass.path}" includeantruntime="false" debug="off" target="1.8" source="1.8" verbose="true"/>
     </target>
 
-    <target name="test" depends="compile" description="compile and run all junit tests">
-        <path id="test.classpath">
-            <fileset dir="${lib}" includes="*.jar"/>
-            <pathelement path="${build}"/>
-        </path>
-        <javac srcdir="${test}" destdir="${build}" includeantruntime="false" debug="on" verbose="true">
-            <classpath refid="test.classpath"/>
+    <target name="compile-test" depends="compile" description="compile the test sources">
+        <fail message="Library &quot;junit-jupiter-api&quot; is missing!">
+            <condition><resourcecount count="1" when="lt">
+                <fileset id="junit-jupiter-api" dir="${lib}" includes="junit-jupiter-api-5*.jar"/>
+            </resourcecount></condition>
+        </fail>
+        <javac srcdir="${test}" destdir="${build}" includes="**/test/**/*.java" includeantruntime="false" debug="on" verbose="true">
+            <classpath>
+                <pathelement path="${build}"/>
+                <fileset refid="junit-jupiter-api"/>
+                <fileset dir="${lib}" includes="apiguardian-api-1*.jar"/>
+            </classpath>
         </javac>
-        <junitlauncher haltOnFailure="true" printSummary="true">
-            <classpath refid="test.classpath"/>
-            <testclasses outputdir="${java.io.tmpdir}">
-                <fork dir="${base}"/>
-                <fileset dir="${build}" includes="**/test/*Test.class" excludes="**/Abstract*.class"/>
-                <listener type="legacy-brief" sendSysOut="true"/>
-            </testclasses>
-        </junitlauncher>
     </target>
 
     <target name="version" depends="compile" description="read the version info">
@@ -60,15 +60,16 @@
         <fail unless="sqlitemap.VERSION_MAJOR">Property 'VERSION_MAJOR' was not found!</fail>
         <fail unless="sqlitemap.VERSION_MINOR">Property 'VERSION_MINOR' was not found!</fail>
         <fail unless="sqlitemap.VERSION_PATCH">Property 'VERSION_PATCH' was not found!</fail>
+        <echo message="Version: MAJOR=${sqlitemap.VERSION_MAJOR} MINOR=${sqlitemap.VERSION_MINOR} PATCH=${sqlitemap.VERSION_PATCH}"/>
     </target>
 
     <target name="doc" depends="init,bootpath" description="generate documentation">
-        <javadoc sourcepath="${src}" destdir="${doc}" bootclasspath="${bootclass.path}" source="1.8" access="protected" doctitle="SQLiteMap" windowtitle="SQLiteMap">
+        <javadoc sourcepath="${src}" destdir="${doc}" bootclasspath="${bootclass.path}" source="1.8" access="protected" doctitle="SQLiteMap" windowtitle="SQLiteMap" failonerror="yes">
             <bottom>Created by LoRd_MuldeR &amp;lt;mulder2@gmx.de&amp;gt; | License: CC0 1.0 Universal</bottom>
         </javadoc>
     </target>
 
-    <target name="dist" depends="clean,version,doc" description="generate the distribution">
+    <target name="dist" depends="compile,version,doc" description="generate the distribution">
         <local name="version"/>
         <property name="version" value="${sqlitemap.VERSION_MAJOR}.${sqlitemap.VERSION_MINOR}.${sqlitemap.VERSION_PATCH}"/>
         <jar jarfile="${dist}/sqlite-map-${version}.jar">
@@ -94,8 +95,8 @@
     <target name="clean" depends="init" description="clean up build files">
         <delete includeemptydirs="true" verbose="true">
             <fileset dir="${build}" includes="**/*" excludes=".gitkeep"/>
-            <fileset dir="${doc}" includes="**/*" excludes=".gitkeep"/>
-            <fileset dir="${dist}" includes="**/*" excludes=".gitkeep"/>
+            <fileset dir="${doc}"   includes="**/*" excludes=".gitkeep"/>
+            <fileset dir="${dist}"  includes="**/*" excludes=".gitkeep"/>
         </delete>
     </target>
 </project>
