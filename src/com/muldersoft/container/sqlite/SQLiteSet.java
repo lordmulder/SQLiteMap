@@ -10,13 +10,17 @@
 package com.muldersoft.container.sqlite;
 
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.ConcurrentModificationException;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Spliterator;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import com.muldersoft.container.sqlite.SQLiteMap.SQLiteMapException;
 
@@ -46,7 +50,13 @@ import com.muldersoft.container.sqlite.SQLiteMap.SQLiteMapException;
  * The method {@link iterator} is <b>not</b> "reentrant", in the sense that the iterators created by these method <b>must</b>
  * explicitly be {@code close()}'d <i>before</i> another iterator  may be created. The methods {@link hashCode},
  * {@link #equals equals()} and {@link #forEach forEach()} <b>must not</b> be called while an iteration is in progress.
- * Creating an iterator is <b>not</b> allowed from with a {@link #forEach forEach()} action.
+ * Creating a new iterator is <b>not</b> allowed from a {@link #forEach forEach()} action.
+ * <p>
+ * {@code SQLiteSet}, <i>in general</i>, makes <b>no</b> guarantees as to the order of the set; in particular, it does
+ * <b>not</b> guarantee that the order will remain constant over time. However, overloaded iterator methods are provided which
+ * allow for enforcing an <i>explicit</i> {@link SQLiteMap.IterationOrder iteration order}. Additionally, the <i>default</i>
+ * iteration order can be stipulate via the corresponding setter methods. Enforcing an <i>explicit</i> iteration order may
+ * degrade the iterator's performance, compared to {@code UNSPECIFIED} order.
  * <p>
  * All iterators returned by this class's iterator methods are <i>"fail-fast"</i>: if the set is modified at any time after the
  * iterator was created, then the iterator throws a {@link ConcurrentModificationException} when the next element is accessed.
@@ -54,16 +64,16 @@ import com.muldersoft.container.sqlite.SQLiteMap.SQLiteMapException;
  * database table is modified <i>"externally"</i>, these modifications will <b>not</b> be reflected by the existing iterator!
  * <p>
  * The {@link toArray}, {@link #spliterator spliterator()}, {@link #stream stream()} and {@link #parallelStream parallelStream}
- * methods currently are <b>not</b> supported by this class. 
+ * methods currently are <b>not</b> supported by this class.
  * <p>
  * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when no longer needed. If an
  * {@code SQLiteSet} instance is <b>not</b> properly closed, a <i>resource leak</i> occurs, because the underlying database
  * connection is <i>never</i> closed. Also, if using a "temporary" database table, then that table is <i>not</i> dropped until
  * the {@code SQLiteSet} instance is closed. This class does <b>not</b> use finalizers to perform the required clean-up,
  * because finalizers are inherently unreliable and may even hurt performance.
- * 
+ *
  * @param <E> the type of elements maintained by this set
- * 
+ *
  * @author Created by LoRd_MuldeR &lt;mulder2@gmx.de&gt;
  * @see <a href="https://github.com/lordmulder/SQLiteMap">SQLiteMap (GitHub project)</a>
  * @see <a href="https://www.sqlite.org/index.html">SQLite Home Page</a>
@@ -79,7 +89,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     // ======================================================================
 
     /**
-     * Exception class to indicate {@link SQLiteSet} errors
+     * Exception class to indicate {@link SQLiteSet} errors.
      */
     public static class SQLiteSetException extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -98,6 +108,50 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     }
 
     // ======================================================================
+    // Order
+    // ======================================================================
+
+    /**
+     * Specifies the iteration order, for iterator methods that support ordering.
+     */
+    public enum IterationOrder {
+        /**
+         * The elements are returned in <b>no</b> particular order. This generally is the <i>fastest</i> iteration order,
+         * because SQLite can return the elements in whatever order is expected to give the best performance.
+         * <p>
+         * This can appear to be equivalent to {@code ASCENDING} order, but do <b>not</b> rely on that!
+         */
+        UNSPECIFIED(SQLiteMap.IterationOrder.UNSPECIFIED),
+        /**
+         * Forces the elements to be returned in <i>ascending</i> "natural" order. May be slower than {@code UNSPECIFIED}.
+         */
+        ASCENDING(SQLiteMap.IterationOrder.ASCENDING),
+        /**
+         * Forces the elements to be returned in <i>descending</i> "natural" order. May be slower than {@code UNSPECIFIED}.
+         */
+        DESCENDING(SQLiteMap.IterationOrder.DESCENDING);
+
+        private static class MapHolder {
+            static final Map<SQLiteMap.IterationOrder, IterationOrder> REVERSE_MAP =
+                Collections.unmodifiableMap(Arrays.stream(IterationOrder.values()).collect(Collectors.toMap(t -> t.getOrder(), t -> t)));
+        }
+
+        private SQLiteMap.IterationOrder order;
+
+        private IterationOrder(final SQLiteMap.IterationOrder order) {
+            this.order = Objects.requireNonNull(order);
+        }
+
+        protected SQLiteMap.IterationOrder getOrder() {
+            return order;
+        }
+
+        protected static IterationOrder fromOrder(final SQLiteMap.IterationOrder order) {
+            return MapHolder.REVERSE_MAP.get(order);
+        }
+    }
+
+    // ======================================================================
     // Set Iterator
     // ======================================================================
 
@@ -107,11 +161,11 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
      * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
      */
     public class SQLiteSetIterator implements Iterator<E>, AutoCloseable {
-        private final SQLiteMap<E, Boolean>.SQLiteMapKeyIterator iter;
+        private SQLiteMap<E, Boolean>.SQLiteMapKeyIterator iter;
 
         public SQLiteSetIterator(final SQLiteMap<E, Boolean>.SQLiteMapKeyIterator iter) {
             try {
-                this.iter = Objects.requireNonNull(iter);
+                this.iter = Objects.requireNonNull(iter, "Iterator must not be null!");
             } catch (final SQLiteMapException e) {
                 throw new SQLiteSetException(e);
             }
@@ -119,6 +173,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
 
         @Override
         public boolean hasNext() {
+            ensureIteratorNotClosed();
             try {
                 return iter.hasNext();
             } catch (final SQLiteMapException e) {
@@ -128,10 +183,17 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
 
         @Override
         public E next() {
+            ensureIteratorNotClosed();
             try {
                 return iter.next();
             } catch (final SQLiteMapException e) {
                 throw new SQLiteSetException(e);
+            }
+        }
+
+        private void ensureIteratorNotClosed() {
+            if (iter == null) {
+                throw new IllegalStateException("Iterator has already been closed!");
             }
         }
 
@@ -141,6 +203,8 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
                 iter.close();
             } catch (final SQLiteMapException e) {
                 throw new SQLiteSetException(e);
+            } finally {
+                iter = null;
             }
         }
     }
@@ -314,10 +378,33 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
         }
     }
 
+    /**
+     * Returns an iterator over the elements in this set. The elements are returned in no particular order.
+     * <p>
+     * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+     *
+     * @return an iterator over the elements in this set
+     */
     @Override
     public SQLiteSetIterator iterator() {
         try {
             return new SQLiteSetIterator(map.keyIterator());
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    /**
+     * Returns an iterator over the elements in this set. The elements are returned in the specified order.
+     * <p>
+     * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+     *
+     * @param order the order in which the elements will be returned (ascending or descending)
+     * @return an iterator over the elements in this set
+     */
+    public SQLiteSetIterator iterator(final IterationOrder order) {
+        try {
+            return new SQLiteSetIterator(map.keyIterator(order.getOrder()));
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }
@@ -450,7 +537,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     public boolean equals(final Object o) {
         if (o == this) {
             return true;
-        } 
+        }
         if (!(o instanceof Set)) {
             return false;
         }
@@ -458,6 +545,25 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
             final Set<?> set = (Set<?>) o;
             final long size =  (set instanceof SQLiteSet) ? ((SQLiteSet<?>)set).sizeLong() : set.size();
             return (map.sizeLong() == size) && map.containsAllKeys(set);
+        } catch (final SQLiteMapException e) {
+            throw new SQLiteSetException(e);
+        }
+    }
+
+    /**
+     * Set the <i>default</i> iteration order. Also returns the previous default iteration order.
+     * <p>
+     * This specifies the iteration order to be used by all iterator methods that do <b>not</b> explicitly take an iteration
+     * order as parameter. Iterator methods that <i>do</i> take the iteration order as parameter are unaffected!
+     * <p>
+     * <b>Note:</b> The default iteration order of a new {@code SQLiteMap} instance is {@link IterationOrder#UNSPECIFIED}.
+     *
+     * @param order the new default iteration order
+     * @return the previous default iteration order
+     */
+    public IterationOrder setDefaultOrder(final IterationOrder order) {
+        try {
+            return IterationOrder.fromOrder(map.setDefaultKeyOrder(order.getOrder()));
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }

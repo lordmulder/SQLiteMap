@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.TreeSet;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
@@ -35,20 +36,25 @@ public class StressTest {
     // ======================================================================
 
     public static void main(String[] args) throws Exception {
-        final Cipher cipher0 = Cipher.getInstance("AES/ECB/NoPadding");
-        final Cipher cipher1 = Cipher.getInstance("AES/ECB/NoPadding");
-        final SecureRandom secureRandom = new SecureRandom();
-        cipher0.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secureRandom.generateSeed(32), "AES"));
-        cipher1.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secureRandom.generateSeed(32), "AES"));
-        final MutableEntry<String, String>[] data = allocateArray(BATCH_SIZE);
         printMemoryStats();
-        try (final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            try {
+        System.out.printf("Average time: %,d%n", measure(5, StressTest::runTest));
+        System.gc();
+        printMemoryStats();
+    }
+    
+    private static void runTest() {
+        try {
+            final Cipher cipher0 = Cipher.getInstance("AES/ECB/NoPadding");
+            final Cipher cipher1 = Cipher.getInstance("AES/ECB/NoPadding");
+            final SecureRandom secureRandom = new SecureRandom();
+            cipher0.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secureRandom.generateSeed(32), "AES"));
+            cipher1.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secureRandom.generateSeed(32), "AES"));
+            final MutableEntry<String, String>[] data = allocateBuffer(BATCH_SIZE);
+            try (final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
                 final List<MutableEntry<String, String>> list = Arrays.asList(data);
                 final ByteBuffer buffer = ByteBuffer.allocate(16);
                 long currentTime = -1L, nextUpdate = System.currentTimeMillis() + UPDATE_INTERVAL;
-                final long clockStart = System.currentTimeMillis();
-                for (int counter = 0, spinner = 0; counter < LIMIT; counter += data.length) {
+                for (int counter = 0; counter < LIMIT; counter += data.length) {
                     buffer.putInt(12, counter);
                     for (int i = 0; i < data.length; ++i) {
                         buffer.put(15, (byte)i);
@@ -58,21 +64,14 @@ public class StressTest {
                     map.putAll0(list);
                     if ((currentTime = System.currentTimeMillis()) >= nextUpdate) {
                         System.out.printf("%,d%n", map.size());
-                        if (++spinner >= 5) {
-                            printMemoryStats();
-                            spinner = 0;
-                        }
                         nextUpdate = currentTime + UPDATE_INTERVAL;
                     }
                 }
-                final long clockEnd = System.currentTimeMillis();
-                System.out.printf("Total time: %,d%n", clockEnd - clockStart);
-            } finally {
-                System.out.printf("Completed!%n%,d%n", map.size());
-                System.gc();
-                printMemoryStats();
-                Thread.sleep(9999);
+                System.out.printf("%,d%n", map.size());
             }
+        } catch (final Exception e) {
+            e.printStackTrace();
+            System.exit(1);
         }
     }
 
@@ -83,6 +82,22 @@ public class StressTest {
     private static void printMemoryStats() {
         final Runtime runtime = Runtime.getRuntime();
         System.out.printf("Memory: free=%,d, total=%,d, max=%,d%n", runtime.freeMemory(), runtime.totalMemory(), runtime.maxMemory());
+    }
+
+    private static long measure(final int count, final Runnable runnable) {
+        if ((count < 5) || (count % 2 != 1)) {
+            throw new IllegalArgumentException("Invalid count specified!");
+        }
+        final TreeSet<Long> runs = new TreeSet<Long>();
+        for (int r = 0; r < count; ++r) {
+            System.out.printf("Run %d of %d, please wait...%n", r + 1, count);
+            final long clock0 = System.nanoTime();
+            runnable.run();
+            final long clock1 = System.nanoTime();
+            runs.add(clock1 - clock0);
+        }
+        final int skip = runs.size() / 4, limit = runs.size() - (2 * skip);
+        return Math.round(runs.stream().mapToLong(Long::longValue).skip(skip).limit(limit).average().orElse(-1));
     }
 
     private static String bytesToHex(final byte[] bytes) {
@@ -98,12 +113,17 @@ public class StressTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static <K, V> MutableEntry<K, V>[] allocateArray(final int length) {
-        final MutableEntry<K, V>[] array = (MutableEntry<K, V>[]) Array.newInstance(MutableEntry.class, length);
+    private static <K, V> MutableEntry<K, V>[] allocateBuffer(final int length) {
+        final MutableEntry<K, V>[] array = (MutableEntry<K, V>[]) allocateArray(MutableEntry.class, length);
         for (int i = 0; i < length; ++i) {
             array[i] = new MutableEntry<K, V>();
         }
         return array;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T[] allocateArray(final Class<T> clazz, final int length) {
+        return (T[]) Array.newInstance(clazz, length);
     }
 
     // ======================================================================

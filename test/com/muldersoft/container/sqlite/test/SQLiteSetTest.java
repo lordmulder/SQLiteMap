@@ -20,12 +20,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
 import javax.crypto.Cipher;
@@ -38,6 +42,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import com.muldersoft.container.sqlite.SQLiteSet;
+import com.muldersoft.container.sqlite.SQLiteSet.IterationOrder;
 
 @TestMethodOrder(OrderAnnotation.class)
 public class SQLiteSetTest  extends AbstractTest {
@@ -51,6 +56,10 @@ public class SQLiteSetTest  extends AbstractTest {
         builder.add("qux");
         REFERENCE = Collections.unmodifiableSet(builder);
     }
+
+    private static final List<String> ALPHABET = Collections.unmodifiableList(Arrays.asList(
+        "Anton", "Berta", "Caesar", "Dora", "Emil", "Friedrich", "Gustav", "Heinrich", "Ida", "Julius", "Kaufmann", "Ludwig", "Martha", "Nordpol",
+        "Otto", "Paula", "Quelle", "Richard", "Samuel", "Theodor", "Ulrich", "Viktor", "Wilhelm", "Xanthippe", "Ypsilon", "Zacharias"));
 
     // ======================================================================
     // Test Cases
@@ -365,6 +374,64 @@ public class SQLiteSetTest  extends AbstractTest {
 
     @RepeatedTest(5)
     @Order(17)
+    public void testIteratorOrderBy() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
+        try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
+            for (final String key : keysRandomized) {
+                set.add0(key);
+            }
+            try (final SQLiteSet<String>.SQLiteSetIterator iter = set.iterator(IterationOrder.ASCENDING)) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+            try (final SQLiteSet<String>.SQLiteSetIterator iter = set.iterator(IterationOrder.DESCENDING)) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(18)
+    public void testIteratorDefaultKeyOrder() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
+        try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
+            for (final String key : keysRandomized) {
+                set.add0(key);
+            }
+            assertEquals(IterationOrder.UNSPECIFIED, set.setDefaultOrder(IterationOrder.ASCENDING));
+            try (final SQLiteSet<String>.SQLiteSetIterator iter = set.iterator()) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+            assertEquals(IterationOrder.ASCENDING, set.setDefaultOrder(IterationOrder.DESCENDING));
+            try (final SQLiteSet<String>.SQLiteSetIterator iter = set.iterator()) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(19)
     public void testHashCode() {
         try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
             for (final String ref : REFERENCE) {
@@ -388,7 +455,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(18)
+    @Order(20)
     public void testEquals() {
         final Set<String> reference = new HashSet<String>(REFERENCE);
         try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
@@ -413,7 +480,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(19)
+    @Order(21)
     public void testForEach() {
         final Set<String> entries = new LinkedHashSet<String>();
         try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
@@ -426,7 +493,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(20)
+    @Order(22)
     public void testSpliterator() throws Exception {
         try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
             for (final String ref : REFERENCE) {
@@ -437,7 +504,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(21)
+    @Order(23)
     public void testStream() throws Exception {
         try(final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class)) {
             for (final String ref : REFERENCE) {
@@ -448,7 +515,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(22)
+    @Order(24)
     public void testClose() throws Exception {
         final SQLiteSet<String> set = SQLiteSet.fromMemory(String.class);
         set.close();
@@ -456,7 +523,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(23)
+    @Order(25)
     public void testRandomStrings() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");
@@ -483,7 +550,7 @@ public class SQLiteSetTest  extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(24)
+    @Order(26)
     public void testRandomBytes() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");

@@ -28,11 +28,15 @@ import java.util.Collections;
 import java.util.ConcurrentModificationException;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
@@ -47,6 +51,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import com.muldersoft.container.sqlite.SQLiteMap;
+import com.muldersoft.container.sqlite.SQLiteMap.IterationOrder;
 
 @TestMethodOrder(OrderAnnotation.class)
 public class SQLiteMapTest extends AbstractTest {
@@ -60,6 +65,10 @@ public class SQLiteMapTest extends AbstractTest {
         builder.put("qux", "sed diam nonumy");
         REFERENCE = Collections.unmodifiableMap(builder);
     }
+
+    private static final List<String> ALPHABET = Collections.unmodifiableList(Arrays.asList(
+        "Anton", "Berta", "Caesar", "Dora", "Emil", "Friedrich", "Gustav", "Heinrich", "Ida", "Julius", "Kaufmann", "Ludwig", "Martha", "Nordpol",
+        "Otto", "Paula", "Quelle", "Richard", "Samuel", "Theodor", "Ulrich", "Viktor", "Wilhelm", "Xanthippe", "Ypsilon", "Zacharias"));
 
     private static final String EXTRA_VALUE1 = "ut labore et dolore";
     private static final String EXTRA_VALUE0 = "eirmod tempor invidunt";
@@ -691,9 +700,11 @@ public class SQLiteMapTest extends AbstractTest {
             final Map<String, String> entries = new LinkedHashMap<String, String>();
             try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
                 while (iter.hasNext()) {
+                    assertTrue(iter.hasNext());
                     final Entry<String, String> current = iter.next();
                     entries.put(current.getKey(), current.getValue());
                 }
+                assertFalse(iter.hasNext());
             }
             assertEquals(REFERENCE, entries);
         }
@@ -701,6 +712,34 @@ public class SQLiteMapTest extends AbstractTest {
 
     @RepeatedTest(5)
     @Order(36)
+    public void testIteratorOrderBy() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final String key : keysRandomized) {
+                map.put0(key, Integer.toHexString(0x69AF90B7 ^ key.hashCode()));
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator(IterationOrder.ASCENDING)) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next().getKey());
+                }
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator(IterationOrder.DESCENDING)) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next().getKey());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(37)
     public void testKeyIterator() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -709,15 +748,45 @@ public class SQLiteMapTest extends AbstractTest {
             final Set<String> keys = new LinkedHashSet<String>();
             try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator()) {
                 while (iter.hasNext()) {
+                    assertTrue(iter.hasNext());
                     keys.add(iter.next());
                 }
+                assertFalse(iter.hasNext());
             }
             assertCollectionEq(REFERENCE.keySet(), keys);
         }
     }
 
     @RepeatedTest(5)
-    @Order(37)
+    @Order(38)
+    public void testKeyIteratorOrderBy() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final String key : keysRandomized) {
+                map.put0(key, Integer.toHexString(0x69AF90B7 ^ key.hashCode()));
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator(IterationOrder.ASCENDING)) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator(IterationOrder.DESCENDING)) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(39)
     public void testValueIterator() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -726,69 +795,165 @@ public class SQLiteMapTest extends AbstractTest {
             final Set<String> values = new LinkedHashSet<String>();
             try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
                 while (iter.hasNext()) {
+                    assertTrue(iter.hasNext());
                     values.add(iter.next());
                 }
+                assertFalse(iter.hasNext());
             }
             assertCollectionEq(REFERENCE.values(), values);
         }
     }
 
     @RepeatedTest(5)
-    @Order(38)
-    public void testIteratorFailFast() {
-        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
-                map.put0(ref.getKey(), ref.getValue());
-            }
-            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
-                map.put("xyz", EXTRA_VALUE0);
-                assertThrows(ConcurrentModificationException.class, () -> iter.next());
-            }
-            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
-                map.remove("bar");
-                assertThrows(ConcurrentModificationException.class, () -> iter.next());
-            }
-        }
-    }
-
-    @RepeatedTest(5)
-    @Order(39)
-    public void testKeyIteratorFailFast() {
-        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
-                map.put0(ref.getKey(), ref.getValue());
-            }
-            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator()) {
-                map.put("xyz", EXTRA_VALUE0);
-                assertThrows(ConcurrentModificationException.class, () -> iter.next());
-            }
-            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator()) {
-                map.remove("bar");
-                assertThrows(ConcurrentModificationException.class, () -> iter.next());
-            }
-        }
-    }
-
-    @RepeatedTest(5)
     @Order(40)
-    public void testValueIteratorFailFast() {
+    public void testValueIteratorOrderBy() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
-                map.put0(ref.getKey(), ref.getValue());
+            for (final String key : keysRandomized) {
+                map.put0(Integer.toHexString(0x69AF90B7 ^ key.hashCode()), key);
             }
-            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
-                map.put("xyz", EXTRA_VALUE0);
-                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator(IterationOrder.ASCENDING)) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
             }
-            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
-                map.remove("bar");
-                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator(IterationOrder.DESCENDING)) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
             }
         }
     }
 
     @RepeatedTest(5)
     @Order(41)
+    public void testIteratorDefaultKeyOrder() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final String key : keysRandomized) {
+                map.put0(key, Integer.toHexString(0x69AF90B7 ^ key.hashCode()));
+            }
+            assertEquals(IterationOrder.UNSPECIFIED, map.setDefaultKeyOrder(IterationOrder.ASCENDING));
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next().getKey());
+                }
+            }
+            assertEquals(IterationOrder.ASCENDING, map.setDefaultKeyOrder(IterationOrder.DESCENDING));
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next().getKey());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(42)
+    public void testIteratorDefaultValueOrder() {
+        final List<String> keysDescending = new ArrayList<String>(ALPHABET);
+        final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
+        Collections.reverse(keysDescending);
+        Collections.shuffle(keysRandomized, ThreadLocalRandom.current());
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final String key : keysRandomized) {
+                map.put0(Integer.toHexString(0x69AF90B7 ^ key.hashCode()), key);
+            }
+            assertEquals(IterationOrder.UNSPECIFIED, map.setDefaultValueOrder(IterationOrder.ASCENDING));
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
+                final Iterator<String> expected = ALPHABET.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+            assertEquals(IterationOrder.ASCENDING, map.setDefaultValueOrder(IterationOrder.DESCENDING));
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
+                final Iterator<String> expected = keysDescending.iterator();
+                while (expected.hasNext()) {
+                    assertTrue(iter.hasNext());
+                    assertEquals(expected.next(), iter.next());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(43)
+    public void testIteratorFailFast() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
+                assertTrue(iter.hasNext());
+                map.put("xyz", EXTRA_VALUE0);
+                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
+                assertTrue(iter.hasNext());
+                map.remove("bar");
+                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(44)
+    public void testKeyIteratorFailFast() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator()) {
+                assertTrue(iter.hasNext());
+                map.put("xyz", EXTRA_VALUE0);
+                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator()) {
+                assertTrue(iter.hasNext());
+                map.remove("bar");
+                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(45)
+    public void testValueIteratorFailFast() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
+                assertTrue(iter.hasNext());
+                map.put("xyz", EXTRA_VALUE0);
+                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
+                assertTrue(iter.hasNext());
+                map.remove("bar");
+                assertThrows(ConcurrentModificationException.class, () -> iter.next());
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(46)
     public void testIteratorRecursive() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -801,7 +966,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(42)
+    @Order(47)
     public void testKeyIteratorRecursive() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -814,7 +979,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(43)
+    @Order(48)
     public void testValueIteratorRecursive() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -827,7 +992,115 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(44)
+    @Order(49)
+    public void testIteratorAtEnd() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapEntryIterator iter = map.iterator()) {
+                assertThrows(NoSuchElementException.class, () -> {
+                    for(;;) {
+                        iter.next();
+                    }
+                });
+                assertFalse(iter.hasNext());
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(50)
+    public void testKeyIteratorAtEnd() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapKeyIterator iter = map.keyIterator()) {
+                assertThrows(NoSuchElementException.class, () -> {
+                    for(;;) {
+                        iter.next();
+                    }
+                });
+                assertFalse(iter.hasNext());
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(51)
+    public void testValueIteratorAtEnd() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            try (final SQLiteMap<String, String>.SQLiteMapValueIterator iter = map.valueIterator()) {
+                assertThrows(NoSuchElementException.class, () -> {
+                    for(;;) {
+                        iter.next();
+                    }
+                });
+                assertFalse(iter.hasNext());
+            }
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(52)
+    public void testIteratorClosed() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            final SQLiteMap<String, String>.SQLiteMapEntryIterator iter0 = map.iterator();
+            iter0.close();
+            assertThrows(IllegalStateException.class, () -> iter0.next());
+            final SQLiteMap<String, String>.SQLiteMapEntryIterator iter1 = map.iterator();
+            while(iter1.hasNext()) {
+                iter1.next();
+            }
+            assertThrows(IllegalStateException.class, () -> iter1.next());
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(53)
+    public void testKeyIteratorClosed() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            final SQLiteMap<String, String>.SQLiteMapKeyIterator iter0 = map.keyIterator();
+            iter0.close();
+            assertThrows(IllegalStateException.class, () -> iter0.next());
+            final SQLiteMap<String, String>.SQLiteMapKeyIterator iter1 = map.keyIterator();
+            while(iter1.hasNext()) {
+                iter1.next();
+            }
+            assertThrows(IllegalStateException.class, () -> iter1.next());
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(54)
+    public void testValueIteratorClosed() {
+        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            final SQLiteMap<String, String>.SQLiteMapValueIterator iter0 = map.valueIterator();
+            iter0.close();
+            assertThrows(IllegalStateException.class, () -> iter0.next());
+            final SQLiteMap<String, String>.SQLiteMapValueIterator iter1 = map.valueIterator();
+            while(iter1.hasNext()) {
+                iter1.next();
+            }
+            assertThrows(IllegalStateException.class, () -> iter1.next());
+        }
+    }
+
+    @RepeatedTest(5)
+    @Order(55)
     public void testKeySet() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -851,7 +1124,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(45)
+    @Order(56)
     public void testValues() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -875,7 +1148,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(46)
+    @Order(57)
     public void testEntrySet() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -901,7 +1174,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(47)
+    @Order(58)
     public void testHashCode() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -925,7 +1198,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(48)
+    @Order(59)
     public void testEquals() {
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -949,7 +1222,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(49)
+    @Order(60)
     public void testForEach() {
         final Map<String, String> entries = new HashMap<String, String>();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -962,7 +1235,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(50)
+    @Order(61)
     public void testForEachEntry() {
         final Map<String, String> entries = new HashMap<String, String>();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -975,7 +1248,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(51)
+    @Order(62)
     public void testForEachKey() {
         final Set<String> keys = new LinkedHashSet<String>();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -988,7 +1261,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(52)
+    @Order(63)
     public void testSetValueIndex() throws Exception {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             map.setValueIndexEnabled(true);
@@ -1007,7 +1280,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(53)
+    @Order(64)
     public void testSpliterator() throws Exception {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1018,7 +1291,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(54)
+    @Order(65)
     public void testClose() throws Exception {
         final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class);
         map.close();
@@ -1026,7 +1299,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(55)
+    @Order(66)
     public void testRandomStrings() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey0 = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");
@@ -1056,7 +1329,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(56)
+    @Order(67)
     public void testRandomBytes() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey0 = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");

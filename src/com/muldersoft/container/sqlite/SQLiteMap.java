@@ -70,7 +70,13 @@ import java.util.stream.Collectors;
  * objects provided by {@link #entrySet()}, {@link #keySet()} and {@link values} are <b>not</b> "reentrant", in the sense that
  * the iterators created by these methods <b>must</b> explicitly be {@code close()}'d <i>before</i> another iterator  may be
  * created. The methods {@link hashCode}, {@link #equals equals()} and {@link #forEach forEach()} <b>must not</b> be called
- * while an iteration is in progress. Creating an iterator is <b>not</b> allowed from with a {@link #forEach forEach()} action.
+ * while an iteration is in progress. Creating a new iterator is <b>not</b> allowed from a {@link #forEach forEach()} action.
+ * <p>
+ * {@code SQLiteMap}, <i>in general</i>, makes <b>no</b> guarantees as to the order of the map; in particular, it does
+ * <b>not</b> guarantee that the order will remain constant over time. However, overloaded iterator methods are provided which
+ * allow for enforcing an <i>explicit</i> {@link SQLiteMap.IterationOrder iteration order}. Additionally, the <i>default</i>
+ * iteration order can be stipulate via the corresponding setter methods. Enforcing an <i>explicit</i> iteration order may
+ * degrade the iterator's performance, compared to {@code UNSPECIFIED} order.
  * <p>
  * All iterators returned by this class's iterator methods are <i>"fail-fast"</i>: if the map is modified at any time after the
  * iterator was created, then the iterator throws a {@link ConcurrentModificationException} when the next element is accessed.
@@ -99,7 +105,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     private static final short VERSION_MAJOR = 1;
     private static final short VERSION_MINOR = 0;
-    private static final short VERSION_PATCH = 1;
+    private static final short VERSION_PATCH = 2;
 
     private static final String SQLITE_JDBC_DRIVER = "org.sqlite.JDBC";
     private static final String SQLITE_JDBC_PREFIX = "jdbc:sqlite:";
@@ -135,6 +141,9 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private final Set<Statement> pendingIterators = new LinkedHashSet<Statement>();
     private final Set<AutoCloseable> cleanUpQueue = new LinkedHashSet<AutoCloseable>();
 
+    private IterationOrder defaultKeyOrder   = IterationOrder.UNSPECIFIED;
+    private IterationOrder defaultValueOrder = IterationOrder.UNSPECIFIED;
+
     // ======================================================================
     // SQL Statements
     // ======================================================================
@@ -148,12 +157,18 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private static final String SQL_FETCH_KEYS    = "SELECT key FROM `%s`;";
     private static final String SQL_FETCH_VALUES  = "SELECT value FROM `%s`;";
     private static final String SQL_FETCH_ENTRIES = "SELECT key, value FROM `%s`;";
-    private static final String SQL_INSERT_ENTRY  = "INSERT INTO `%s` (key, value) VALUES (?, ?);";
-    private static final String SQL_INSERT_ENTRY0 = "INSERT INTO `%s` (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING;";
+    private static final String SQL_SORT_ENTRIES0 = "SELECT key, value FROM `%s` ORDER BY key ASC;";
+    private static final String SQL_SORT_ENTRIES1 = "SELECT key, value FROM `%s` ORDER BY key DESC;";
+    private static final String SQL_SORT_KEYS0    = "SELECT key FROM `%s` ORDER BY key ASC;";
+    private static final String SQL_SORT_KEYS1    = "SELECT key FROM `%s` ORDER BY key DESC;";
+    private static final String SQL_SORT_VALUES0  = "SELECT value FROM `%s` ORDER BY value ASC;";
+    private static final String SQL_SORT_VALUES1  = "SELECT value FROM `%s` ORDER BY value DESC;";
+    private static final String SQL_INSERT_ENTRY0 = "INSERT INTO `%s` (key, value) VALUES (?, ?);";
+    private static final String SQL_INSERT_ENTRY1 = "INSERT INTO `%s` (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING;";
     private static final String SQL_UPSERT_ENTRY  = "INSERT INTO `%s` (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
     private static final String SQL_UPDATE_ENTRY  = "UPDATE `%s` SET value = ? WHERE key = ?;";
-    private static final String SQL_REMOVE_ENTRY  = "DELETE FROM `%s` WHERE key = ?;";
-    private static final String SQL_REMOVE_ENTRY0 = "DELETE FROM `%s` WHERE key = ? AND value = ?;";
+    private static final String SQL_REMOVE_ENTRY0 = "DELETE FROM `%s` WHERE key = ?;";
+    private static final String SQL_REMOVE_ENTRY1 = "DELETE FROM `%s` WHERE key = ? AND value = ?;";
     private static final String SQL_CLEAR_ENTRIES = "DELETE FROM `%s`;";
     private static final String SQL_COUNT_ENTRIES = "SELECT COUNT(*) FROM `%s`;";
     private static final String SQL_COUNT_KEYS    = "SELECT COUNT(*) FROM `%s` WHERE key = ?;";
@@ -163,12 +178,18 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private final PreparedStatementHolder sqlFetchKeys    = new PreparedStatementHolder(SQL_FETCH_KEYS);
     private final PreparedStatementHolder sqlFetchValues  = new PreparedStatementHolder(SQL_FETCH_VALUES);
     private final PreparedStatementHolder sqlFetchEntries = new PreparedStatementHolder(SQL_FETCH_ENTRIES);
-    private final PreparedStatementHolder sqlInsertEntry  = new PreparedStatementHolder(SQL_INSERT_ENTRY);
+    private final PreparedStatementHolder sqlSortEntries0 = new PreparedStatementHolder(SQL_SORT_ENTRIES0);
+    private final PreparedStatementHolder sqlSortEntries1 = new PreparedStatementHolder(SQL_SORT_ENTRIES1);
+    private final PreparedStatementHolder sqlSortKeys0    = new PreparedStatementHolder(SQL_SORT_KEYS0);
+    private final PreparedStatementHolder sqlSortKeys1    = new PreparedStatementHolder(SQL_SORT_KEYS1);
+    private final PreparedStatementHolder sqlSortValues0  = new PreparedStatementHolder(SQL_SORT_VALUES0);
+    private final PreparedStatementHolder sqlSortValues1  = new PreparedStatementHolder(SQL_SORT_VALUES1);
     private final PreparedStatementHolder sqlInsertEntry0 = new PreparedStatementHolder(SQL_INSERT_ENTRY0);
+    private final PreparedStatementHolder sqlInsertEntry1 = new PreparedStatementHolder(SQL_INSERT_ENTRY1);
     private final PreparedStatementHolder sqlUpsertEntry  = new PreparedStatementHolder(SQL_UPSERT_ENTRY);
     private final PreparedStatementHolder sqlUpdateEntry  = new PreparedStatementHolder(SQL_UPDATE_ENTRY);
-    private final PreparedStatementHolder sqlRemoveEntry  = new PreparedStatementHolder(SQL_REMOVE_ENTRY);
     private final PreparedStatementHolder sqlRemoveEntry0 = new PreparedStatementHolder(SQL_REMOVE_ENTRY0);
+    private final PreparedStatementHolder sqlRemoveEntry1 = new PreparedStatementHolder(SQL_REMOVE_ENTRY1);
     private final PreparedStatementHolder sqlClearEntries = new PreparedStatementHolder(SQL_CLEAR_ENTRIES);
     private final PreparedStatementHolder sqlCountEntries = new PreparedStatementHolder(SQL_COUNT_ENTRIES);
     private final PreparedStatementHolder sqlCountKeys    = new PreparedStatementHolder(SQL_COUNT_KEYS);
@@ -216,7 +237,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     // ======================================================================
 
     /**
-     * Exception class to indicate {@link SQLiteMap} errors
+     * Exception class to indicate {@link SQLiteMap} errors.
      */
     public static class SQLiteMapException extends RuntimeException {
         private static final long serialVersionUID = 1L;
@@ -228,6 +249,31 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         public SQLiteMapException(final String message, final Throwable cause) {
             super(message, cause);
         }
+    }
+
+    // ======================================================================
+    // Order
+    // ======================================================================
+
+    /**
+     * Specifies the iteration order, for iterator methods that support ordering.
+     */
+    public enum IterationOrder {
+        /**
+         * The elements are returned in <b>no</b> particular order. This generally is the <i>fastest</i> iteration order,
+         * because SQLite can return the elements in whatever order is expected to give the best performance.
+         * <p>
+         * This can appear to be equivalent to {@code ASCENDING} order, but do <b>not</b> rely on that!
+         */
+        UNSPECIFIED,
+        /**
+         * Forces the elements to be returned in <i>ascending</i> "natural" order. May be slower than {@code UNSPECIFIED}.
+         */
+        ASCENDING,
+        /**
+         * Forces the elements to be returned in <i>descending</i> "natural" order. May be slower than {@code UNSPECIFIED}.
+         */
+        DESCENDING
     }
 
     // ======================================================================
@@ -523,12 +569,12 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         public boolean equals(final Object o) {
             if (o == this) {
                 return true;
-            } else if (o instanceof Entry) {
-                final Entry<?, ?> entry = (Entry<?, ?>)o;
-                return typeK.equals(key, entry.getKey()) && typeV.equals(value, entry.getValue());
-            } else {
+            }
+            if (!(o instanceof Entry)) {
                 return false;
             }
+            final Entry<?, ?> entry = (Entry<?, ?>) o;
+            return typeK.equals(key, entry.getKey()) && typeV.equals(value, entry.getValue());
         }
     }
 
@@ -542,9 +588,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     protected abstract class SQLiteMapAbstractIterator<T> implements Iterator<T>, AutoCloseable {
         protected final long modifyCount;
         protected final PreparedStatement statement;
-        protected final ResultSet resultSet;
-
-        protected int state = 0;
+        protected ResultSet resultSet;
+        protected boolean pending = false;
 
         protected SQLiteMapAbstractIterator(final PreparedStatement statement) throws Exception {
             modifyCount = SQLiteMap.this.modifyCount;
@@ -552,7 +597,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                 throw new IllegalStateException("Cannot create new iterator while previous iterator is still active!");
             }
             try {
-                resultSet = Objects.requireNonNull(statement.executeQuery());
+                resultSet = Objects.requireNonNull(statement.executeQuery(), "Result set must not be null!");
             } catch (final Exception e) {
                 pendingIterators.remove(statement);
                 throw e;
@@ -562,35 +607,37 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
         @Override
         public boolean hasNext() {
-            ensureConnectionNotClosed();
-            if (state < 0) {
+            try {
+                ensureIteratorNotClosed();
+                if (!pending) {
+                    pending = fetchNextElement();
+                }
+                return pending;
+            } catch (IllegalStateException e) {
                 return false;
-            } else if (state > 0) {
-                return true;
-            } else {
-                return fetchNextElement();
             }
         }
 
         protected boolean fetchNextElement() {
-            if (state < 0) {
-                throw new NoSuchElementException("Iterator is already exhausted!");
-            }
             try {
-                ensureResultSetIsStillValid();
-                if (resultSet.next()) {
-                    state = 1;
-                    return true;
-                } else {
-                    close(); /*no more elements!*/
+                if (!resultSet.next()) {
+                    close();
                     return false;
                 }
+                return true;
             } catch (final SQLException e) {
                 throw new SQLiteMapException("Failed to query next element!", e);
             }
         }
 
-        protected void ensureResultSetIsStillValid() throws SQLException {
+        protected void ensureIteratorNotClosed() {
+            SQLiteMap.this.ensureConnectionNotClosed();
+            if (resultSet == null) {
+                throw new IllegalStateException("Iterator has already been closed!");
+            }
+        }
+
+        protected void ensureMapHasNotBeenModified() throws SQLException {
             if (modifyCount != SQLiteMap.this.modifyCount) {
                 try {
                     close();
@@ -601,13 +648,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
         @Override
         public void close() {
-            if (state >= 0) {
-                state = -1;
+            if (resultSet != null) {
                 try {
                     resultSet.close();
                 } catch (final SQLException e) {
                     throw new SQLiteMapException("Failed to clean up iterator!", e);
                 } finally {
+                    resultSet = null;
                     pendingIterators.remove(statement);
                     cleanUpQueue.remove(this);
                 }
@@ -618,7 +665,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     /**
      * Iterator implementation for iterating {@link SQLiteMap} keys.
      * <p>
-     * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
+     * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link #close close()}'d when they are no
+     * longer needed!
+     * <p>
+     * The iterator is closed <i>implicitly</i> when the end of the iteration was reached, i.e. when {@link #hasNext hasNext()}
+     * has returned {@code false} or when {@link #next next()} has thrown a {@code NoSuchElementException} exception.
      */
     public class SQLiteMapKeyIterator extends SQLiteMapAbstractIterator<K> {
         private SQLiteMapKeyIterator(final PreparedStatement statement) throws Exception {
@@ -627,17 +678,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
         @Override
         public K next() {
-            ensureConnectionNotClosed();
-            if ((state < 0) || ((state == 0) && (!fetchNextElement()))) {
+            ensureIteratorNotClosed();
+            if ((!pending) && (!fetchNextElement())) {
                 throw new NoSuchElementException("No more elements are available!");
             }
             try {
-                ensureResultSetIsStillValid();
+                ensureMapHasNotBeenModified();
                 return typeK.getResult(resultSet, 1);
             } catch (final SQLException e) {
                 throw new SQLiteMapException("Failed to read next key-value pair!", e);
             } finally {
-                state = 0; /*reset state!*/
+                pending = false; /*reset state!*/
             }
         }
     }
@@ -645,7 +696,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     /**
      * Iterator implementation for iterating {@link SQLiteMap} values.
      * <p>
-     * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
+     * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link #close close()}'d when they are no
+     * longer needed!
+     * <p>
+     * The iterator is closed <i>implicitly</i> when the end of the iteration was reached, i.e. when {@link #hasNext hasNext()}
+     * has returned {@code false} or when {@link #next next()} has thrown a {@code NoSuchElementException} exception.
      */
     public class SQLiteMapValueIterator extends SQLiteMapAbstractIterator<V> {
         private SQLiteMapValueIterator(final PreparedStatement statement) throws Exception {
@@ -654,17 +709,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
         @Override
         public V next() {
-            ensureConnectionNotClosed();
-            if ((state < 0) || ((state == 0) && (!fetchNextElement()))) {
-                throw new NoSuchElementException("No further elements are available!");
+            ensureIteratorNotClosed();
+            if ((!pending) && (!fetchNextElement())) {
+                throw new NoSuchElementException("No more elements are available!");
             }
             try {
-                ensureResultSetIsStillValid();
+                ensureMapHasNotBeenModified();
                 return typeV.getResult(resultSet, 1);
             } catch (final SQLException e) {
                 throw new SQLiteMapException("Failed to read next key-value pair!", e);
             } finally {
-                state = 0; /*reset state!*/
+                pending = false; /*reset state!*/
             }
         }
     }
@@ -672,7 +727,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     /**
      * Iterator implementation for iterating {@link SQLiteMap} entries.
      * <p>
-     * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when they are no longer needed!
+     * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link #close close()}'d when they are no
+     * longer needed!
+     * <p>
+     * The iterator is closed <i>implicitly</i> when the end of the iteration was reached, i.e. when {@link #hasNext hasNext()}
+     * has returned {@code false} or when {@link #next next()} has thrown a {@code NoSuchElementException} exception.
      */
     public class SQLiteMapEntryIterator extends SQLiteMapAbstractIterator<Entry<K, V>> {
         private SQLiteMapEntryIterator(final PreparedStatement statement) throws Exception {
@@ -681,17 +740,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
         @Override
         public Entry<K, V> next() {
-            ensureConnectionNotClosed();
-            if ((state < 0) || ((state == 0) && (!fetchNextElement()))) {
+            ensureIteratorNotClosed();
+            if ((!pending) && (!fetchNextElement())) {
                 throw new NoSuchElementException("No more elements are available!");
             }
             try {
-                ensureResultSetIsStillValid();
+                ensureMapHasNotBeenModified();
                 return new SQLiteMapEntry(typeK.getResult(resultSet, 1), typeV.getResult(resultSet, 2));
             } catch (final SQLException e) {
                 throw new SQLiteMapException("Failed to read next key-value pair!", e);
             } finally {
-                state = 0; /*reset state!*/
+                pending = false; /*reset state!*/
             }
         }
     }
@@ -766,6 +825,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     /**
      * Set view implementation of the keys contained in an {@link SQLiteMap}.
+     * <p>
+     * The set is backed by the underlying map, so changes to the map are reflected in the set, and vice-versa.
      */
     public class SQLiteMapKeySet extends SQLiteMapAbstractSet<K> {
         @Override
@@ -778,9 +839,28 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             return SQLiteMap.this.containsAllKeys(c);
         }
 
+        /**
+         * Returns an iterator over the elements in this set. The elements are returned in no particular order.
+         * <p>
+         * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+         *
+         * @return an iterator over elements in this set
+         */
         @Override
         public SQLiteMapKeyIterator iterator() {
             return SQLiteMap.this.keyIterator();
+        }
+
+        /**
+         * Returns an iterator over the elements in this set. The elements are returned in the specified order.
+         * <p>
+         * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+         *
+         * @param order The order in which the elements of this set will be returned (ascending or descending)
+         * @return an iterator over the elements in this set
+         */
+        public SQLiteMapKeyIterator iterator(final IterationOrder order) {
+            return SQLiteMap.this.keyIterator(order);
         }
 
         @Override
@@ -823,6 +903,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     /**
      * Set view implementation of the values contained in an {@link SQLiteMap}.
+     * <p>
+     * The set is backed by the underlying map, so changes to the map are reflected in the set, and vice-versa.
      */
     public class SQLiteMapValueCollection extends SQLiteMapAbstractSet<V> {
         @Override
@@ -835,14 +917,35 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             return SQLiteMap.this.containsAllValues(c);
         }
 
+        /**
+         * Returns an iterator over the elements in this set. The elements are returned in no particular order.
+         * <p>
+         * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+         *
+         * @return an iterator over elements in this set
+         */
         @Override
         public SQLiteMapValueIterator iterator() {
             return SQLiteMap.this.valueIterator();
+        }
+
+        /**
+         * Returns an iterator over the elements in this set. The elements are returned in the specified order.
+         * <p>
+         * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+         *
+         * @param order The order in which the elements of this set will be returned (ascending or descending)
+         * @return an iterator over the elements in this set
+         */
+        public SQLiteMapValueIterator iterator(final IterationOrder order) {
+            return SQLiteMap.this.valueIterator(order);
         }
     }
 
     /**
      * Set view implementation of the mappings contained in an {@link SQLiteMap}.
+     * <p>
+     * The set is backed by the underlying map, so changes to the map are reflected in the set, and vice-versa.
      */
     public class SQLiteMapEntrySet extends SQLiteMapAbstractSet<Entry<K, V>> {
         @Override
@@ -855,9 +958,28 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             return SQLiteMap.this.containsAllEntries(c);
         }
 
+        /**
+         * Returns an iterator over the elements in this set. The elements are returned in no particular order.
+         * <p>
+         * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+         *
+         * @return an iterator over elements in this set
+         */
         @Override
         public SQLiteMapEntryIterator iterator() {
             return SQLiteMap.this.iterator();
+        }
+
+        /**
+         * Returns an iterator over the elements in this set. The elements are returned in the specified order.
+         * <p>
+         * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+         *
+         * @param order The order in which the elements of this set will be returned (ascending or descending)
+         * @return an iterator over the elements in this set
+         */
+        public SQLiteMapEntryIterator iterator(final IterationOrder order) {
+            return SQLiteMap.this.iterator(order);
         }
     }
 
@@ -1734,7 +1856,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     /**
-     * Returns an iterator over the key-value pairs in this map. The key-value pairs are returned in no particular order.
+     * Returns an iterator over the key-value pairs in this map. The key-value pairs are returned in <i>default</i> order.
      * <p>
      * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
      *
@@ -1742,8 +1864,21 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      */
     @Override
     public SQLiteMapEntryIterator iterator() {
+        return iterator(defaultKeyOrder);
+    }
+
+    /**
+     * Returns an iterator over the key-value pairs in this map. The key-value pairs are returned in the specified order.
+     * <p>
+     * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+     *
+     * @param order The <i>key</i> order in which the key-value pairs will be returned (ascending or descending)
+     * @return an iterator over the key-value pairs in this map
+     */
+    public SQLiteMapEntryIterator iterator(final IterationOrder order) {
+        Objects.requireNonNull(order, "Order must not be null!");
         ensureConnectionNotClosed();
-        final PreparedStatement preparedStatement = sqlFetchEntries.getInstance();
+        final PreparedStatement preparedStatement = getStatementByOrder(order, sqlFetchEntries, sqlSortEntries0, sqlSortEntries1);
         try {
             return new SQLiteMapEntryIterator(preparedStatement);
         } catch (final IllegalStateException e) {
@@ -1754,15 +1889,29 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     /**
-     * Returns an iterator over the keys in this map. The keys are returned in no particular order.
+     * Returns an iterator over the keys in this map. The keys are returned in <i>default</i> order.
      * <p>
      * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
      *
      * @return an iterator over the keys in this map
      */
     public SQLiteMapKeyIterator keyIterator() {
+        return keyIterator(defaultKeyOrder);
+
+    }
+
+    /**
+     * Returns an iterator over the keys in this map. The keys are returned in the specified order.
+     * <p>
+     * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+     *
+     * @param order The order in which the keys will be returned (ascending or descending)
+     * @return an iterator over the keys in this map
+     */
+    public SQLiteMapKeyIterator keyIterator(final IterationOrder order) {
+        Objects.requireNonNull(order, "Order must not be null!");
         ensureConnectionNotClosed();
-        final PreparedStatement preparedStatement = sqlFetchKeys.getInstance();
+        final PreparedStatement preparedStatement = getStatementByOrder(order, sqlFetchKeys, sqlSortKeys0, sqlSortKeys1);
         try {
             return new SQLiteMapKeyIterator(preparedStatement);
         } catch (final IllegalStateException e) {
@@ -1773,33 +1922,52 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     }
 
     /**
-     * Returns an iterator over the values in this map. The values are returned in no particular order.
+     * Returns an iterator over the values in this map. The values are returned in <i>default</i> order.
      * <p>
      * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
      *
      * @return an iterator over the values in this map
      */
     public SQLiteMapValueIterator valueIterator() {
+        return valueIterator(defaultValueOrder);
+    }
+
+    /**
+     * Returns an iterator over the values in this map. The values are returned in the specified order.
+     * <p>
+     * <b>Important notice:</b> The returned iterator <i>must</i> explicitly be {@link close}'d when it is no longer needed!
+     *
+     * @param order The order in which the values will be returned (ascending or descending)
+     * @return an iterator over the values in this map
+     */
+    public SQLiteMapValueIterator valueIterator(final IterationOrder order) {
+        Objects.requireNonNull(order, "Order must not be null!");
         ensureConnectionNotClosed();
-        final PreparedStatement preparedStatement = sqlFetchValues.getInstance();
+        final PreparedStatement preparedStatement = getStatementByOrder(order, sqlFetchValues, sqlSortValues0, sqlSortValues1);
         try {
             return new SQLiteMapValueIterator(preparedStatement);
         } catch (final IllegalStateException e) {
             throw e; /* do not intercept IllegalStateException */
         } catch (final Exception e) {
-            throw new SQLiteMapException("Failed to query the existing values!", e);
+            throw new SQLiteMapException("Failed to query the existing keys!", e);
         }
     }
 
     /**
-     * Create an index on the "value" column or drop the existing index.
+     * Create an index on the "value" column or drop the existing index. The index created by this method does <b>not</b> have
+     * an effect on the "key" column.
      * <p>
-     * An index on the "value" column can significantly speed up <b>value</b> <i>lookup</i> operations, but it comes at a
-     * certain memory overhead and may slow down all <i>insert</i> operations. Initially, there is <b>no</b> "value" index.
+     * An index on the "value" column can significantly speed up all <b><i>value</i></b> <i>lookup</i> operations (such as
+     * {@link #containsValue containsValue()}), but it comes at a certain memory overhead and it may slow down all
+     * <i>insert</i> operations (such as {@link #put put()} or {@link #put0 put0()}). Furthermore, a "value" index is highly
+     * recommended, in case that the <b><i>values</i></b> contained in the map need to be iterated
+     * {@link #valueIterator(IterationOrder) <i>in a specific order</i>}. Initially, a new {@code SQLiteMap} instance does
+     * <b>not</b> have an index on its "value" column.
      * <p>
-     * <b>Note:</b> There <i>always</i> is an index on the "key" column to speed up <b>key</b> <i>lookup</i> operations.
+     * <b>Note:</b> There <i>always</i> is an implicit index on the "key" column, in order to guarantee the uniqueness of the
+     * keys and in order to speed up <b><i>key</i></b> or <b><i>key-to-value</i></b> <i>lookup</i> operations.
      *
-     * @param enable if {@code true} creates the index, otherwise drops the existing index
+     * @param enable if {@code true} creates the index (if not created yet), otherwise drops the existing index (if present)
      */
     public void setValueIndexEnabled(final boolean enable) {
         ensureConnectionNotClosed();
@@ -1809,6 +1977,40 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         } catch(final Exception e) {
             throw new SQLiteMapException("Failed to create or drop the value index!", e);
         }
+    }
+
+    /**
+     * Set the <i>default</i> <b>key</b> iteration order. Also returns the previous default key iteration order.
+     * <p>
+     * This specifies the iteration order to be used by all iterator methods that do <b>not</b> explicitly take an iteration
+     * order as parameter. Iterator methods that <i>do</i> take the iteration order as parameter are unaffected!
+     * <p>
+     * <b>Note:</b> The default iteration order of a new {@code SQLiteMap} instance is {@link IterationOrder#UNSPECIFIED}.
+     *
+     * @param order the new default <b>key</b> iteration order
+     * @return the previous default <b>key</b> iteration order
+     */
+    public IterationOrder setDefaultKeyOrder(final IterationOrder order) {
+        final IterationOrder oldOrder = defaultKeyOrder;
+        defaultKeyOrder = Objects.requireNonNull(order, "Order must not be null!");
+        return oldOrder;
+    }
+
+    /**
+     * Set the <i>default</i> <b>value</b> iteration order. Also returns the previous default value iteration order.
+     * <p>
+     * This specifies the iteration order to be used by all iterator methods that do <b>not</b> explicitly take an iteration
+     * order as parameter. Iterator methods that <i>do</i> take the iteration order as parameter are unaffected!
+     * <p>
+     * <b>Note:</b> The default iteration order of a new {@code SQLiteMap} instance is {@link IterationOrder#UNSPECIFIED}.
+     *
+     * @param order the new default <b>value</b> iteration order
+     * @return the previous default <b>value</b> iteration order
+     */
+    public IterationOrder setDefaultValueOrder(final IterationOrder order) {
+        final IterationOrder oldOrder = defaultValueOrder;
+        defaultValueOrder = Objects.requireNonNull(order, "Order must not be null!");
+        return oldOrder;
     }
 
     @Override
@@ -2003,7 +2205,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     private void insertEntry(final K key, final V value) {
         ++modifyCount;
-        final PreparedStatement preparedStatement = sqlInsertEntry.getInstance();
+        final PreparedStatement preparedStatement = sqlInsertEntry0.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
@@ -2019,7 +2221,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     private void insertEntryOptional(final K key, final V value) {
         ++modifyCount;
-        final PreparedStatement preparedStatement = sqlInsertEntry0.getInstance();
+        final PreparedStatement preparedStatement = sqlInsertEntry1.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
@@ -2121,7 +2323,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     private void removeEntry(final K key) {
         ++modifyCount;
-        final PreparedStatement preparedStatement = sqlRemoveEntry.getInstance();
+        final PreparedStatement preparedStatement = sqlRemoveEntry0.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             try {
@@ -2136,7 +2338,7 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
 
     private void removeEntry(final K key, final V value) {
         ++modifyCount;
-        final PreparedStatement preparedStatement = sqlRemoveEntry0.getInstance();
+        final PreparedStatement preparedStatement = sqlRemoveEntry1.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
@@ -2175,6 +2377,17 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             }
         }
         return true;
+    }
+
+    private PreparedStatement getStatementByOrder(final IterationOrder order, final PreparedStatementHolder undefinedOrder, final PreparedStatementHolder ascendingOrder, final PreparedStatementHolder descendingOrder) {
+        switch (order) {
+        case ASCENDING:
+            return Objects.requireNonNull(ascendingOrder) .getInstance();
+        case DESCENDING:
+            return Objects.requireNonNull(descendingOrder).getInstance();
+        default:
+            return Objects.requireNonNull(undefinedOrder) .getInstance();
+        }
     }
 
     private void doFinalCleanUp() throws SQLException, IOException {
