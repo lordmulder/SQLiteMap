@@ -7,6 +7,12 @@
     </fail>
 
     <property environment="env"/>
+
+    <tstamp>
+        <format property="build.date" pattern="yyyy-MM-dd" timezone="UTC" locale="en"/>
+        <format property="build.time" pattern="HH:mm:ss"   timezone="UTC" locale="en"/>
+    </tstamp>
+
     <property name="base" location="."/>
     <property name="src" location="src"/>
     <property name="test" location="test"/>
@@ -15,9 +21,12 @@
     <property name="doc" location="docs"/>
     <property name="dist" location="dist"/>
 
-    <target name="all" depends="clean,dist" description="default target for clean+dist"/>
+    <target name="all" depends="clean,dist" description="default target for clean+dist">
+        <echo message="Everything is completed."/>
+    </target>
 
     <target name="init" description="initialize paths">
+        <echo message="Base directory: &quot;${base}&quot;"/>
         <mkdir dir="${build}"/>
         <mkdir dir="${doc}"/>
         <mkdir dir="${dist}"/>
@@ -60,35 +69,90 @@
         <fail unless="sqlitemap.VERSION_MAJOR">Property 'VERSION_MAJOR' was not found!</fail>
         <fail unless="sqlitemap.VERSION_MINOR">Property 'VERSION_MINOR' was not found!</fail>
         <fail unless="sqlitemap.VERSION_PATCH">Property 'VERSION_PATCH' was not found!</fail>
-        <echo message="Version: MAJOR=${sqlitemap.VERSION_MAJOR} MINOR=${sqlitemap.VERSION_MINOR} PATCH=${sqlitemap.VERSION_PATCH}"/>
+        <property name="version.full" value="${sqlitemap.VERSION_MAJOR}.${sqlitemap.VERSION_MINOR}.${sqlitemap.VERSION_PATCH}"/>
+        <echo message="Version: ${version.full}"/>
     </target>
 
-    <target name="doc" depends="init,bootpath" description="generate documentation">
+    <target name="git-rev" description="detect the current git revision">
+        <exec executable="git" dir="${base}" outputproperty="git.revision.commit" failonerror="yes">
+            <arg value="rev-parse"/><arg value="HEAD"/>
+        </exec>
+        <exec executable="git" dir="${base}" outputproperty="git.revision.branch" failonerror="yes">
+            <arg value="rev-parse"/><arg value="--abbrev-ref"/><arg value="HEAD"/>
+        </exec>
+        <echo message="Git Revision: ${git.revision.branch}-${git.revision.commit}"/>
+    </target>
+
+    <target name="git-arch" depends="init" description="archive git source tree as file">
+        <mkdir dir="${dist}/src"/>
+        <property name="git.archive.file" value="${dist}/src/sqlite-map-HEAD.zip"/>
+        <delete file="${git.archive.file}"/>
+        <exec executable="git" dir="${base}" failonerror="yes">
+            <arg value="archive"/><arg value="--verbose"/><arg value="--format=zip"/><arg value="--output=${git.archive.file}"/><arg value="HEAD"/>
+        </exec>
+    </target>
+
+    <target name="javadoc" depends="init,bootpath" description="generate documentation">
         <javadoc sourcepath="${src}" destdir="${doc}" bootclasspath="${bootclass.path}" source="1.8" access="protected" doctitle="SQLiteMap" windowtitle="SQLiteMap" failonerror="yes">
             <bottom>Created by LoRd_MuldeR &amp;lt;mulder2@gmx.de&amp;gt; | License: CC0 1.0 Universal</bottom>
         </javadoc>
     </target>
 
-    <target name="dist" depends="compile,version,doc" description="generate the distribution">
-        <local name="version"/>
-        <property name="version" value="${sqlitemap.VERSION_MAJOR}.${sqlitemap.VERSION_MINOR}.${sqlitemap.VERSION_PATCH}"/>
-        <jar jarfile="${dist}/sqlite-map-${version}.jar">
+    <target name="manifest" depends="version,git-rev" description="generate the manifest">
+        <property name="manifest.file" value="${build}/META-INF/MANIFEST.MF"/>
+        <echo message="File: &quot;${manifest.file}&quot;"/>
+        <truncate file="${manifest.file}" create="true" mkdirs="true"/>
+        <manifest file="${manifest.file}">
+            <attribute name="Build-Date" value="${build.date}"/>
+            <attribute name="Build-Revision" value="${git.revision.branch}-${git.revision.commit}"/>
+            <attribute name="Build-Time" value="${build.time}"/>
+            <attribute name="Bundle-License" value="https://creativecommons.org/publicdomain/zero/1.0/"/>
+            <attribute name="Bundle-Name" value="SQLiteMap"/>
+            <attribute name="Bundle-SymbolicName" value="com.muldersoft.container.sqlite"/>
+            <attribute name="Bundle-Version" value="${version.full}"/>
+            <attribute name="Implementation-Title" value="SQLiteMap"/>
+            <attribute name="Implementation-Vendor" value="LoRd_MuldeR &lt;mulder2@gmx.de&gt;"/>
+            <attribute name="Implementation-Version" value="${version.full}"/>
+            <attribute name="Specification-Title" value="SQLiteMap"/>
+            <attribute name="Specification-Vendor" value="LoRd_MuldeR &lt;mulder2@gmx.de&gt;"/>
+            <attribute name="Specification-Version" value="${version.full}"/>
+        </manifest>
+    </target>
+
+    <target name="jar" depends="compile,manifest,javadoc" description="generate the jar files">
+        <mkdir dir="${dist}/jar"/>
+        <property name="jar.file.bin" value="${dist}/jar/sqlite-map-${version.full}.jar"/>
+        <delete file="${jar.file.bin}"/>
+        <jar jarfile="${jar.file.bin}" manifest="${manifest.file}">
             <fileset dir="${build}" includes="**/*.class" excludes="**/test/**"/>
-            <fileset file="${base}/LICENSE.txt"/>
         </jar>
-        <jar jarfile="${dist}/sqlite-map-${version}-sources.jar">
-            <fileset dir="${src}" includes="**/*.java"/>
-            <fileset file="${base}/LICENSE.txt"/>
-        </jar>
-        <jar jarfile="${dist}/sqlite-map-${version}-javadoc.jar">
+        <property name="jar.file.doc" value="${dist}/jar/sqlite-map-${version.full}-javadoc.jar"/>
+        <delete file="${jar.file.doc}"/>
+        <jar jarfile="${jar.file.doc}" manifest="${manifest.file}">
             <fileset dir="${doc}" includes="**/*"/>
-            <fileset file="${base}/LICENSE.txt"/>
         </jar>
-        <zip destfile="${dist}/sqlite-map-${version}-bin.zip">
-            <fileset dir="${dist}" includes="*.jar"/>
+        <property name="jar.file.src" value="${dist}/jar/sqlite-map-${version.full}-sources.jar"/>
+        <delete file="${jar.file.src}"/>
+        <jar jarfile="${jar.file.src}" manifest="${manifest.file}">
+            <fileset dir="${src}" includes="**/*.java" excludes="**/test/**"/>
+        </jar>
+    </target>
+
+    <target name="dist" depends="jar,git-arch" description="generate the zip files for distribution">
+        <property name="zip.file.bin" value="${dist}/sqlite-map-${version.full}-bin.zip"/>
+        <delete file="${zip.file.bin}"/>
+        <zip destfile="${zip.file.bin}">
+            <fileset file="${jar.file.bin}"/>
+            <fileset file="${jar.file.doc}"/>
+            <fileset file="${jar.file.src}"/>
             <zipfileset prefix="docs" dir="${doc}" includes="**/*"/>
             <fileset file="${base}/README.md"/>
             <fileset file="${base}/LICENSE.txt"/>
+        </zip>
+        <property name="zip.file.src" value="${dist}/sqlite-map-${version.full}-src.zip"/>
+        <delete file="${zip.file.src}"/>
+        <zip destfile="${zip.file.src}">
+            <zipfileset src="${git.archive.file}"/>
         </zip>
     </target>
 

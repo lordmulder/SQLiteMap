@@ -1,22 +1,6 @@
 @echo off
 cd /d "%~dp0"
 
-if not "%JDK17_PATH%"=="" (
-	set "JAVA_HOME=%JDK17_PATH%"
-)
-
-if not exist "%JAVA_HOME%\bin\java.exe" (
-	echo File "%JAVA_HOME%\bin\java.exe" not found. Please check your JAVA_HOME and try again!
-	pause
-	exit /b 1
-)
-
-if not exist "%ANT_HOME%\bin\ant.bat" (
-	echo File "%ANT_HOME%\bin\ant.bat" not found. Please check your ANT_HOME and try again!
-	pause
-	exit /b 1
-)
-
 set "JUNIT_STANDALONE=%CD%\lib\junit-platform-console-standalone.jar"
 for %%f in ("%CD%\lib\junit-platform-console-standalone-*.jar") do set "JUNIT_STANDALONE=%%~ff"
 if not exist "%JUNIT_STANDALONE%" (
@@ -33,9 +17,7 @@ if not exist "%SQLITE_JDBC_LIBRARY%" (
 	exit /b 1
 )
 
-set "PATH=%ANT_HOME%\bin;%JAVA_HOME%\bin"
-
-call "%ANT_HOME%\bin\ant.bat" clean compile-test
+call "%CD%\make.cmd" clean compile-test
 if not %ERRORLEVEL%==0 (
 	echo Error: Something went wrong !!!
 	pause
