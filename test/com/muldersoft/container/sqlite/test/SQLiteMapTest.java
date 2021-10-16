@@ -17,7 +17,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.AbstractMap.SimpleEntry;
@@ -79,7 +83,8 @@ public class SQLiteMapTest extends AbstractTest {
 
     @RepeatedTest(5)
     @Order(0)
-    public void testTypes() {
+    public void testTypes() throws IOException {
+        final Path tempPath = Paths.get(System.getProperty("java.io.tmpdir"));
         final Class<?>[] types = new Class<?>[] { Boolean.class, String.class, Byte.class, byte[].class, Integer.class, Long.class, Instant.class, BigInteger.class };
         for (int i = 0; i < types.length; ++i) {
             for (int j = 0; j < types.length; ++j) {
@@ -99,6 +104,16 @@ public class SQLiteMapTest extends AbstractTest {
                 assertNotNull(map.getPath());
                 assertNotNull(map.getTableName());
                 System.out.printf("%s <- %s%n", map.getTableName(),  map.getPath());
+            }
+            final Path dbFilePath = tempPath.resolve(String.format("test-%08X.db", ThreadLocalRandom.current().nextInt()));
+            try(final SQLiteMap<?, ?> map = SQLiteMap.fromFile(types[i], types[i], dbFilePath, "sqliteMapTestTable", true, true)) {
+                assertEquals(map.getKeyType(),   types[i]);
+                assertEquals(map.getValueType(), types[i]);
+                assertNotNull(map.getPath());
+                assertNotNull(map.getTableName());
+                System.out.printf("%s <- %s%n", map.getTableName(),  map.getPath());
+            } finally {
+                Files.deleteIfExists(dbFilePath);
             }
         }
     }
@@ -162,18 +177,27 @@ public class SQLiteMapTest extends AbstractTest {
     @RepeatedTest(5)
     @Order(5)
     public void testPutAll() {
+        final ThreadLocalRandom random = ThreadLocalRandom.current();
+        final Map<String, String> reference = new LinkedHashMap<String, String>(REFERENCE);
+        for (int i = 0; i < 297; ++i) {
+            reference.put(String.format("key%04X", i), String.format("%08X", random.nextInt()));
+        }
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             map.putAll(REFERENCE);
             assertMapEq(REFERENCE, map);
+            map.putAll(reference);
+            assertMapEq(reference, map);
         }
     }
 
     @RepeatedTest(5)
     @Order(6)
     public void testPutAllEntryCollection() {
-        final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
-        reference.putIfAbsent("bar", EXTRA_VALUE0);
-        reference.putIfAbsent("xyz", EXTRA_VALUE1);
+        final ThreadLocalRandom random = ThreadLocalRandom.current();
+        final Map<String, String> reference = new LinkedHashMap<String, String>(REFERENCE);
+        for (int i = 0; i < 297; ++i) {
+            reference.put(String.format("key%04X", i), String.format("%08X", random.nextInt()));
+        }
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             assertTrue (map.putAll(REFERENCE.entrySet()));
             assertMapEq(REFERENCE, map);
@@ -186,14 +210,22 @@ public class SQLiteMapTest extends AbstractTest {
     @RepeatedTest(5)
     @Order(7)
     public void testPutAllKeyCollection() {
-        final Map<String, String> reference0 = new HashMap<String, String>(REFERENCE);
-        final Map<String, String> reference1 = new HashMap<String, String>(REFERENCE);
-        reference0.replaceAll((key, value) -> EXTRA_VALUE0);
-        reference1.replaceAll((key, value) -> EXTRA_VALUE1);
+        final List<String> keySet = new ArrayList<String>();
+        final Map<String, String> reference0 = new LinkedHashMap<String, String>(REFERENCE);
+        final Map<String, String> reference1 = new LinkedHashMap<String, String>(REFERENCE);
+        for (int i = 0; i < 297; ++i) {
+            final String key = String.format("key%04X", i);
+            keySet.add(key);
+            reference0.put(key, EXTRA_VALUE0);
+            reference1.put(key, EXTRA_VALUE1);
+        }
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            assertTrue (map.putAll(REFERENCE.keySet(), EXTRA_VALUE0));
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put(ref.getKey(), ref.getValue());
+            }
+            assertTrue (map.putAll(keySet, EXTRA_VALUE0));
             assertMapEq(reference0, map);
-            assertFalse(map.putAll(REFERENCE.keySet(), EXTRA_VALUE1));
+            assertFalse(map.putAll(keySet, EXTRA_VALUE1));
             assertMapEq(reference1, map);
         }
     }
@@ -235,20 +267,44 @@ public class SQLiteMapTest extends AbstractTest {
     @RepeatedTest(5)
     @Order(10)
     public void testPutAll0EntryCollection() {
+        final Map<String, String> reference0 = new HashMap<String, String>(REFERENCE);
+        final Map<String, String> reference1 = new HashMap<String, String>(REFERENCE);
+        for (int i = 0; i < 297; ++i) {
+            final String key = String.format("key%04X", i);
+            reference0.put(key, EXTRA_VALUE0);
+            reference1.put(key, EXTRA_VALUE1);
+        }
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            map.putAll0(REFERENCE.entrySet());
-            assertMapEq(REFERENCE, map);
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            map.putAll0(reference0.entrySet());
+            assertMapEq(reference0, map);
+            map.putAll0(reference1.entrySet());
+            assertMapEq(reference1, map);
         }
     }
 
     @RepeatedTest(5)
     @Order(11)
     public void testPutAll0KeyCollection() {
-        final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
-        reference.replaceAll((key, value) -> EXTRA_VALUE0);
+        final List<String> keySet = new ArrayList<String>();
+        final Map<String, String> reference0 = new HashMap<String, String>(REFERENCE);
+        final Map<String, String> reference1 = new HashMap<String, String>(REFERENCE);
+        for (int i = 0; i < 297; ++i) {
+            final String key = String.format("key%04X", i);
+            keySet.add(key);
+            reference0.put(key, EXTRA_VALUE0);
+            reference1.put(key, EXTRA_VALUE1);
+        }
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            map.putAll0(REFERENCE.keySet(), EXTRA_VALUE0);
-            assertMapEq(reference, map);
+            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
+                map.put0(ref.getKey(), ref.getValue());
+            }
+            map.putAll0(keySet, EXTRA_VALUE0);
+            assertMapEq(reference0, map);
+            map.putAll0(keySet, EXTRA_VALUE1);
+            assertMapEq(reference1, map);
         }
     }
 
@@ -310,8 +366,11 @@ public class SQLiteMapTest extends AbstractTest {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
                 map.put0(ref.getKey(), ref.getValue());
             }
-            map.remove0("bar");
-            map.remove0("baz");
+            assertFalse(map.remove0("xyz"));
+            assertTrue (map.remove0("bar"));
+            assertTrue (map.remove0("baz"));
+            assertFalse(map.remove0("bar"));
+            assertFalse(map.remove0("baz"));
             assertMapEq(reference, map);
         }
     }
@@ -340,25 +399,6 @@ public class SQLiteMapTest extends AbstractTest {
 
     @RepeatedTest(5)
     @Order(17)
-    public void testRemove0Value() {
-        final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
-        final String oldValue = reference.get("bar");
-        reference.remove("bar", oldValue);
-        reference.remove("baz", oldValue);
-        reference.remove("xyz", oldValue);
-        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
-                map.put0(ref.getKey(), ref.getValue());
-            }
-            map.remove0("bar", oldValue);
-            map.remove0("baz", oldValue);
-            map.remove0("xyz", oldValue);
-            assertMapEq(reference, map);
-        }
-    }
-
-    @RepeatedTest(5)
-    @Order(18)
     public void testRemoveAll() {
         final Collection<String> collection0 = Arrays.asList("bar", "baz", "xyz");
         final Collection<String> collection1 = Arrays.asList("xyz", "lol", "omg");
@@ -376,25 +416,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(19)
-    public void testRemoveAll0() {
-        final Collection<String> collection0 = Arrays.asList("bar", "baz", "xyz");
-        final Collection<String> collection1 = Arrays.asList("xyz", "lol", "omg");
-        final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
-        reference.keySet().removeAll(collection0);
-        reference.keySet().removeAll(collection1);
-        try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
-            for (final Entry<String, String> ref : REFERENCE.entrySet()) {
-                map.put0(ref.getKey(), ref.getValue());
-            }
-            map.removeAll0(collection0);
-            map.removeAll0(collection1);
-            assertMapEq(reference, map);
-        }
-    }
-
-    @RepeatedTest(5)
-    @Order(20)
+    @Order(18)
     public void testReplace() {
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
         final String expected0 = reference.replace("bar", EXTRA_VALUE0);
@@ -410,7 +432,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(21)
+    @Order(19)
     public void testReplaceValue() {
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
         final String oldValue = reference.get("bar");
@@ -427,7 +449,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(22)
+    @Order(20)
     public void testReplace0() {
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
         reference.replace("bar", EXTRA_VALUE0);
@@ -436,14 +458,20 @@ public class SQLiteMapTest extends AbstractTest {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
                 map.put0(ref.getKey(), ref.getValue());
             }
-            map.replace0("bar", EXTRA_VALUE0);
-            map.replace0("xyz", EXTRA_VALUE1);
+            assertTrue (map.replace0("bar", EXTRA_VALUE0));
+            assertFalse(map.replace0("xyz", EXTRA_VALUE1));
+            assertMapEq(reference, map);
+            map.put0("xyz", "#");
+            assertTrue (map.replace0("xyz", EXTRA_VALUE1));
+            assertTrue (map.replace0("xyz", EXTRA_VALUE1));
+            reference.put("xyz", "#");
+            reference.replace("xyz", EXTRA_VALUE1);
             assertMapEq(reference, map);
         }
     }
 
     @RepeatedTest(5)
-    @Order(23)
+    @Order(21)
     public void testContainsKey() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -479,7 +507,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(24)
+    @Order(22)
     public void testContainsAllKeys() {
         final Set<String> reference = new HashSet<String>(REFERENCE.keySet());
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -495,7 +523,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(25)
+    @Order(23)
     public void testContainsValue() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -518,7 +546,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(26)
+    @Order(24)
     public void testContainsAllValues() {
         final Collection<String> reference = new ArrayList<String>(REFERENCE.values());
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -534,7 +562,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(27)
+    @Order(25)
     public void testContainsEntry() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -553,7 +581,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(28)
+    @Order(26)
     public void testContainsAllEntries() {
         final Set<Entry<String, String>> reference = new HashSet<Entry<String, String>>(REFERENCE.entrySet());
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -569,7 +597,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(29)
+    @Order(27)
     public void testCompute() {
         final AtomicReference<String> val0 = new AtomicReference<>(), val1 = new AtomicReference<>(), val2 = new AtomicReference<>();
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
@@ -588,7 +616,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(30)
+    @Order(28)
     public void testComputeIfAbsent() {
         final AtomicInteger ref0 = new AtomicInteger(), ref1 = new AtomicInteger(), ref2 = new AtomicInteger();
         final AtomicInteger ctr0 = new AtomicInteger(), ctr1 = new AtomicInteger(), ctr2 = new AtomicInteger();
@@ -611,7 +639,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(31)
+    @Order(29)
     public void testComputeIfPresent() {
         final AtomicReference<String> val0 = new AtomicReference<>(), val1 = new AtomicReference<>(), val2 = new AtomicReference<>();
         final AtomicInteger ref0 = new AtomicInteger(), ref1 = new AtomicInteger(), ref2 = new AtomicInteger();
@@ -635,7 +663,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(32)
+    @Order(30)
     public void testClear() {
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
         reference.clear();
@@ -655,7 +683,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(33)
+    @Order(31)
     public void testSize() {
         final int expected = REFERENCE.size();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -677,7 +705,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(34)
+    @Order(32)
     public void testIsEmpty() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             assertTrue(map.isEmpty());
@@ -691,7 +719,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(35)
+    @Order(33)
     public void testIterator() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -711,7 +739,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(36)
+    @Order(34)
     public void testIteratorOrderBy() {
         final List<String> keysDescending = new ArrayList<String>(ALPHABET);
         final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
@@ -739,7 +767,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(37)
+    @Order(35)
     public void testKeyIterator() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -758,7 +786,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(38)
+    @Order(36)
     public void testKeyIteratorOrderBy() {
         final List<String> keysDescending = new ArrayList<String>(ALPHABET);
         final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
@@ -786,7 +814,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(39)
+    @Order(37)
     public void testValueIterator() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -805,7 +833,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(40)
+    @Order(38)
     public void testValueIteratorOrderBy() {
         final List<String> keysDescending = new ArrayList<String>(ALPHABET);
         final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
@@ -833,7 +861,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(41)
+    @Order(39)
     public void testIteratorDefaultKeyOrder() {
         final List<String> keysDescending = new ArrayList<String>(ALPHABET);
         final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
@@ -863,7 +891,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(42)
+    @Order(40)
     public void testIteratorDefaultValueOrder() {
         final List<String> keysDescending = new ArrayList<String>(ALPHABET);
         final List<String> keysRandomized = new ArrayList<String>(ALPHABET);
@@ -893,7 +921,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(43)
+    @Order(41)
     public void testIteratorFailFast() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -913,7 +941,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(44)
+    @Order(42)
     public void testKeyIteratorFailFast() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -933,7 +961,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(45)
+    @Order(43)
     public void testValueIteratorFailFast() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -953,7 +981,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(46)
+    @Order(44)
     public void testIteratorRecursive() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -966,7 +994,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(47)
+    @Order(45)
     public void testKeyIteratorRecursive() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -979,7 +1007,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(48)
+    @Order(46)
     public void testValueIteratorRecursive() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -992,7 +1020,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(49)
+    @Order(47)
     public void testIteratorAtEnd() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1010,7 +1038,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(50)
+    @Order(48)
     public void testKeyIteratorAtEnd() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1028,7 +1056,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(51)
+    @Order(49)
     public void testValueIteratorAtEnd() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1046,7 +1074,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(52)
+    @Order(50)
     public void testIteratorClosed() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1064,7 +1092,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(53)
+    @Order(51)
     public void testKeyIteratorClosed() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1082,7 +1110,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(54)
+    @Order(52)
     public void testValueIteratorClosed() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1100,7 +1128,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(55)
+    @Order(53)
     public void testKeySet() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1124,7 +1152,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(56)
+    @Order(54)
     public void testValues() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1148,7 +1176,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(57)
+    @Order(55)
     public void testEntrySet() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1174,7 +1202,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(58)
+    @Order(56)
     public void testHashCode() {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1198,7 +1226,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(59)
+    @Order(57)
     public void testEquals() {
         final Map<String, String> reference = new HashMap<String, String>(REFERENCE);
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -1222,7 +1250,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(60)
+    @Order(58)
     public void testForEach() {
         final Map<String, String> entries = new HashMap<String, String>();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -1235,7 +1263,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(61)
+    @Order(59)
     public void testForEachEntry() {
         final Map<String, String> entries = new HashMap<String, String>();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -1248,7 +1276,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(62)
+    @Order(60)
     public void testForEachKey() {
         final Set<String> keys = new LinkedHashSet<String>();
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
@@ -1261,7 +1289,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(63)
+    @Order(61)
     public void testSetValueIndex() throws Exception {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             map.setValueIndexEnabled(true);
@@ -1280,7 +1308,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(64)
+    @Order(62)
     public void testSpliterator() throws Exception {
         try(final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class)) {
             for (final Entry<String, String> ref : REFERENCE.entrySet()) {
@@ -1291,7 +1319,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(65)
+    @Order(63)
     public void testClose() throws Exception {
         final SQLiteMap<String, String> map = SQLiteMap.fromMemory(String.class, String.class);
         map.close();
@@ -1299,7 +1327,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(66)
+    @Order(64)
     public void testRandomStrings() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey0 = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");
@@ -1329,7 +1357,7 @@ public class SQLiteMapTest extends AbstractTest {
     }
 
     @RepeatedTest(5)
-    @Order(67)
+    @Order(65)
     public void testRandomBytes() throws Exception {
         final SecureRandom secureRandom = new SecureRandom();
         final SecretKey desKey0 = new SecretKeySpec(secureRandom.generateSeed(Long.BYTES), "DES");

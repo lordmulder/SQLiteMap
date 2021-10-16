@@ -86,6 +86,8 @@ import java.util.stream.Collectors;
  * The {@link #merge merge()}, {@link #replaceAll replaceAll()} and {@link spliterator} methods currently are <b>not</b>
  * supported by this class.
  * <p>
+ * This {@code Map} implementation does <b>not</b> support {@code null} keys or {@code null} values.
+ * <p>
  * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when no longer needed. If an
  * {@code SQLiteMap} instance is <b>not</b> properly closed, a <i>resource leak</i> occurs, because the underlying database
  * connection is <i>never</i> closed. Also, if using a "temporary" database table, then that table is <i>not</i> dropped until
@@ -104,8 +106,8 @@ import java.util.stream.Collectors;
 public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>, AutoCloseable {
 
     private static final short VERSION_MAJOR = 1;
-    private static final short VERSION_MINOR = 0;
-    private static final short VERSION_PATCH = 2;
+    private static final short VERSION_MINOR = 1;
+    private static final short VERSION_PATCH = 0;
 
     private static final String SQLITE_JDBC_DRIVER = "org.sqlite.JDBC";
     private static final String SQLITE_JDBC_PREFIX = "jdbc:sqlite:";
@@ -166,7 +168,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private static final String SQL_INSERT_ENTRY0 = "INSERT INTO `%s` (key, value) VALUES (?, ?);";
     private static final String SQL_INSERT_ENTRY1 = "INSERT INTO `%s` (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING;";
     private static final String SQL_UPSERT_ENTRY  = "INSERT INTO `%s` (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;";
-    private static final String SQL_UPDATE_ENTRY  = "UPDATE `%s` SET value = ? WHERE key = ?;";
+    private static final String SQL_UPDATE_ENTRY0 = "UPDATE `%s` SET value = ? WHERE key = ?;";
+    private static final String SQL_UPDATE_ENTRY1 = "UPDATE `%s` SET value = ? WHERE key = ? AND value = ?;";
     private static final String SQL_REMOVE_ENTRY0 = "DELETE FROM `%s` WHERE key = ?;";
     private static final String SQL_REMOVE_ENTRY1 = "DELETE FROM `%s` WHERE key = ? AND value = ?;";
     private static final String SQL_CLEAR_ENTRIES = "DELETE FROM `%s`;";
@@ -187,7 +190,8 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     private final PreparedStatementHolder sqlInsertEntry0 = new PreparedStatementHolder(SQL_INSERT_ENTRY0);
     private final PreparedStatementHolder sqlInsertEntry1 = new PreparedStatementHolder(SQL_INSERT_ENTRY1);
     private final PreparedStatementHolder sqlUpsertEntry  = new PreparedStatementHolder(SQL_UPSERT_ENTRY);
-    private final PreparedStatementHolder sqlUpdateEntry  = new PreparedStatementHolder(SQL_UPDATE_ENTRY);
+    private final PreparedStatementHolder sqlUpdateEntry0 = new PreparedStatementHolder(SQL_UPDATE_ENTRY0);
+    private final PreparedStatementHolder sqlUpdateEntry1 = new PreparedStatementHolder(SQL_UPDATE_ENTRY1);
     private final PreparedStatementHolder sqlRemoveEntry0 = new PreparedStatementHolder(SQL_REMOVE_ENTRY0);
     private final PreparedStatementHolder sqlRemoveEntry1 = new PreparedStatementHolder(SQL_REMOVE_ENTRY1);
     private final PreparedStatementHolder sqlClearEntries = new PreparedStatementHolder(SQL_CLEAR_ENTRIES);
@@ -884,17 +888,6 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
             return SQLiteMap.this.removeAll(c);
         }
 
-        /**
-         * A version of {@link removeAll} that does <b>not</b> return a result.
-         * <p>
-         * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
-         *
-         * @param c collection of keys whose mapping is to be removed from the map
-         */
-        public void removeAll0(final Collection<?> c) {
-            SQLiteMap.this.removeAll0(c);
-        }
-
         @Override
         public void clear() {
             SQLiteMap.this.clear();
@@ -1562,17 +1555,13 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
     @Override
     public boolean replace(final K key, final V oldValue, final V newValue) {
         Objects.requireNonNull(key, "Key must not be null!");
-        Objects.requireNonNull(newValue, "Value must not be null!");
+        Objects.requireNonNull(newValue, "New value must not be null!");
+        if (oldValue == null) {
+            return false;
+        }
         ensureConnectionNotClosed();
         try {
-            return transaction(connection, () -> {
-                final V previousValue = fetchEntry(key);
-                if ((previousValue != null) && typeV.equals(previousValue, oldValue)) {
-                    updateEntry(key, newValue);
-                    return true;
-                }
-                return false;
-            });
+            return updateEntry(key, oldValue, newValue);
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to store new key-value pair!", e);
         }
@@ -1585,13 +1574,14 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      *
      * @param key key with which the specified value is associated
      * @param value value to be associated with the specified key
+     * @return returns {@code true}, if an existing mapping for the specified key was updated
      */
-    public void replace0(final K key, final V value) {
+    public boolean replace0(final K key, final V value) {
         Objects.requireNonNull(key, "Key must not be null!");
         Objects.requireNonNull(value, "Value must not be null!");
         ensureConnectionNotClosed();
         try {
-            updateEntry(key, value);
+            return updateEntry(key, value);
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to store new key-value pair!", e);
         }
@@ -1623,57 +1613,34 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         if (typedKey == null) {
             return false;
         }
+        final V typedValue = typeV.fromObject(value);
+        if (typedValue == null) {
+            return false;
+        }
         ensureConnectionNotClosed();
         try {
-            return transaction(connection, () -> {
-                final V previousValue = fetchEntry(typedKey);
-                if ((previousValue != null) && typeV.equals(previousValue, value)) {
-                    removeEntry(typedKey);
-                    return true;
-                }
-                return false;
-            });
+            return removeEntry(typedKey, typedValue);
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to remove key-value pair!", e);
         }
     }
 
     /**
-     * A version of {@link remove} that does <b>not</b> return a result.
+     * A version of {@link remove} that does <b>not</b> return a value.
      * <p>
-     * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
+     * This method is a performance optimization and should be preferred whenever the previous value is <b>not</b> needed.
      *
      * @param key key whose mapping is to be removed from the map
+     * @return returns {@code true}, if the mapping for the specified key was removed
      */
-    public void remove0(Object key) {
+    public boolean remove0(Object key) {
         final K typedKey = typeK.fromObject(key);
         if (typedKey == null) {
-            return;
+            return false;
         }
         ensureConnectionNotClosed();
         try {
-            removeEntry(typedKey);
-        } catch (final Exception e) {
-            throw new SQLiteMapException("Failed to remove key-value pair!", e);
-        }
-    }
-
-    /**
-     * A version of {@link remove} that does <b>not</b> return a result.
-     * <p>
-     * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
-     *
-     * @param key key whose mapping is to be removed from the map
-     * @param value value expected to be associated with the specified key
-     */
-    public void remove0(Object key, final Object value) {
-        final K typedKey = typeK.fromObject(key);
-        if (typedKey == null) {
-            return;
-        }
-        ensureConnectionNotClosed();
-        try {
-            removeEntry(typedKey, typeV.fromObject(value));
+            return removeEntry(typedKey);
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to remove key-value pair!", e);
         }
@@ -1695,36 +1662,11 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
                 boolean result = false;
                 for (final Object key : keys) {
                     final K typedKey = typeK.fromObject(key);
-                    if ((typedKey != null) && (countKeys(typedKey) > 0L)) {
+                    if ((typedKey != null) && removeEntry(typedKey)) {
                         result = true;
-                        removeEntry(typedKey);
                     }
                 }
                 return result;
-            });
-        } catch (final Exception e) {
-            throw new SQLiteMapException("Failed to remove key-value pairs!", e);
-        }
-    }
-
-    /**
-     * A version of {@link remove} that removes <i>multiple</i> keys.
-     * <p>
-     * This method is a performance optimization and should be preferred whenever <i>multiple</i> keys need to be removed and the result is <b>not</b> needed.
-     *
-     * @param keys collection of keys whose mapping is to be removed from the map
-     */
-    public void removeAll0(final Collection<?> keys) {
-        Objects.requireNonNull(keys, "Collection must not be null!");
-        ensureConnectionNotClosed();
-        try {
-            transaction(connection, () -> {
-                for (final Object key : keys) {
-                    final K typedKey = typeK.fromObject(key);
-                    if (typedKey != null) {
-                        removeEntry(typedKey);
-                    }
-                }
             });
         } catch (final Exception e) {
             throw new SQLiteMapException("Failed to remove key-value pairs!", e);
@@ -1897,7 +1839,6 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
      */
     public SQLiteMapKeyIterator keyIterator() {
         return keyIterator(defaultKeyOrder);
-
     }
 
     /**
@@ -2305,14 +2246,14 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         }
     }
 
-    private void updateEntry(final K key, final V value) {
+    private boolean updateEntry(final K key, final V value) {
         ++modifyCount;
-        final PreparedStatement preparedStatement = sqlUpdateEntry.getInstance();
+        final PreparedStatement preparedStatement = sqlUpdateEntry0.getInstance();
         try {
             typeK.setParameter(preparedStatement, 2, key);
             typeV.setParameter(preparedStatement, 1, value);
             try {
-                preparedStatement.executeUpdate();
+                return (preparedStatement.executeUpdate() > 0);
             } finally {
                 preparedStatement.clearParameters();
             }
@@ -2321,13 +2262,30 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         }
     }
 
-    private void removeEntry(final K key) {
+    private boolean updateEntry(final K key, final V oldValue, final V newValue) {
+        ++modifyCount;
+        final PreparedStatement preparedStatement = sqlUpdateEntry1.getInstance();
+        try {
+            typeK.setParameter(preparedStatement, 2, key);
+            typeV.setParameter(preparedStatement, 3, oldValue);
+            typeV.setParameter(preparedStatement, 1, newValue);
+            try {
+                return (preparedStatement.executeUpdate() > 0);
+            } finally {
+                preparedStatement.clearParameters();
+            }
+        } catch (final SQLException e) {
+            throw new SQLiteMapException("Failed to insert the new key-value pair!", e);
+        }
+    }
+
+    private boolean removeEntry(final K key) {
         ++modifyCount;
         final PreparedStatement preparedStatement = sqlRemoveEntry0.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             try {
-                preparedStatement.executeUpdate();
+                return (preparedStatement.executeUpdate() > 0);
            } finally {
                 preparedStatement.clearParameters();
             }
@@ -2336,14 +2294,14 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         }
     }
 
-    private void removeEntry(final K key, final V value) {
+    private boolean removeEntry(final K key, final V value) {
         ++modifyCount;
         final PreparedStatement preparedStatement = sqlRemoveEntry1.getInstance();
         try {
             typeK.setParameter(preparedStatement, 1, key);
             typeV.setParameter(preparedStatement, 2, value);
             try {
-                preparedStatement.executeUpdate();
+                return (preparedStatement.executeUpdate() > 0);
            } finally {
                 preparedStatement.clearParameters();
             }
@@ -2379,14 +2337,16 @@ public final class SQLiteMap<K,V> implements Map<K,V>, Iterable<Map.Entry<K, V>>
         return true;
     }
 
-    private PreparedStatement getStatementByOrder(final IterationOrder order, final PreparedStatementHolder undefinedOrder, final PreparedStatementHolder ascendingOrder, final PreparedStatementHolder descendingOrder) {
-        switch (order) {
+    private PreparedStatement getStatementByOrder(final IterationOrder iterationOrder, final PreparedStatementHolder statement0, final PreparedStatementHolder statement1, final PreparedStatementHolder statement2) {
+        switch (iterationOrder) {
+        case UNSPECIFIED:
+            return Objects.requireNonNull(statement0).getInstance();
         case ASCENDING:
-            return Objects.requireNonNull(ascendingOrder) .getInstance();
+            return Objects.requireNonNull(statement1).getInstance();
         case DESCENDING:
-            return Objects.requireNonNull(descendingOrder).getInstance();
+            return Objects.requireNonNull(statement2).getInstance();
         default:
-            return Objects.requireNonNull(undefinedOrder) .getInstance();
+            throw new IllegalArgumentException("Invalid iteration order specified!");
         }
     }
 

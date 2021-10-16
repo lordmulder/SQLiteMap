@@ -66,6 +66,8 @@ import com.muldersoft.container.sqlite.SQLiteMap.SQLiteMapException;
  * The {@link toArray}, {@link #spliterator spliterator()}, {@link #stream stream()} and {@link #parallelStream parallelStream}
  * methods currently are <b>not</b> supported by this class.
  * <p>
+ * This {@code Set} implementation does <b>not</b> support {@code null} values.
+ * <p>
  * <b>Important notice:</b> Instances of this class <i>must</i> explicitly be {@link close}'d when no longer needed. If an
  * {@code SQLiteSet} instance is <b>not</b> properly closed, a <i>resource leak</i> occurs, because the underlying database
  * connection is <i>never</i> closed. Also, if using a "temporary" database table, then that table is <i>not</i> dropped until
@@ -461,22 +463,7 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     @Override
     public boolean remove(final Object o) {
         try {
-            return (map.remove(o) != null);
-        } catch (final SQLiteMapException e) {
-            throw new SQLiteSetException(e);
-        }
-    }
-
-    /**
-     * A version of {@link remove} that does <b>not</b> return whether the set contained the element.
-     * <p>
-     * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
-     *
-     * @param o object to be removed from this set, if present
-     */
-    public void remove0(final Object o) {
-        try {
-            map.remove0(o);
+            return map.remove0(o);
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }
@@ -486,21 +473,6 @@ public class SQLiteSet<E> implements Set<E>, AutoCloseable {
     public boolean removeAll(final Collection<?> c) {
         try {
             return map.removeAll(c);
-        } catch (final SQLiteMapException e) {
-            throw new SQLiteSetException(e);
-        }
-    }
-
-    /**
-     * A version of {@link removeAll} that does <b>not</b> return a result.
-     * <p>
-     * This method is a performance optimization and should be preferred whenever the result is <b>not</b> needed.
-     *
-     * @param c collection containing elements to be removed from this set
-     */
-    public void removeAll0(final Collection<?> c) {
-        try {
-            map.removeAll0(c);
         } catch (final SQLiteMapException e) {
             throw new SQLiteSetException(e);
         }
